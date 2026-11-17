@@ -252,6 +252,18 @@ if ($Diagnose) {
     if (Test-Path $mjJson) {
         try { "Кэш Majestic:    $((Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath)" } catch {}
     }
+    $launcherProc = Get-Process -Name 'Majestic Launcher' -ErrorAction SilentlyContinue
+    "Лаунчер запущен: $([bool]$launcherProc)"
+    if (-not $launcherProc) {
+        "  (это нормально, если Majestic сейчас закрыт;"
+        "   тревога только если лаунчер ОТКРЫТ, а строка говорит False -"
+        "   значит Majestic переименовал процесс и триггер архивации не сработает)"
+    }
+    $bkDir = "$env:APPDATA\majestic-launcher\Multiplayer\backup"
+    if (Test-Path $bkDir) {
+        $binCount = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
+        "Бэкап .bin в папке лаунчера: $binCount шт. (0 = архивированы, >0 = ждать запуска лаунчера)"
+    }
 
     "=== ПОСЛЕДНИЕ СОБЫТИЯ ==="
     Get-Content $LogFile -Tail 8 -ErrorAction SilentlyContinue
