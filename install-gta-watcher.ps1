@@ -212,46 +212,48 @@ function Restore-VanillaBackup {
 
 # ---------------- diagnose mode ----------------
 if ($Diagnose) {
-    "HelperDir: $HelperDir"
-    "Golden:    $Golden (exists: $(Test-Path $Golden))"
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    "=== ОБЩЕЕ ==="
+    "Папка пакета:    $HelperDir"
+    "Эталон:          $Golden (есть: $(Test-Path $Golden))"
     $sx = Find-SettingsXml
-    "Settings:  $sx"
+    "Настройки игры:  $sx"
     if ($Golden) {
         $g = Get-Content $Golden -Raw
-        "Golden valid xml: $($g -match '<Settings>')  corruption: $($g -match '\$\d')"
-        "TextureQuality in golden: $(([regex]::Match($g, '<TextureQuality value=`"([^`"]+)`"')).Groups[1].Value)"
+        "Эталон валиден:  $($g -match '<Settings>')   повреждён: $($g -match '\$\d')"
+        "TextureQuality:  $(([regex]::Match($g, '<TextureQuality value=`"([^`"]+)`"')).Groups[1].Value)"
     }
     if ($sx) {
-        "Settings read-only: $((Get-Item $sx -ErrorAction SilentlyContinue).IsReadOnly)"
-        "Settings MOTW (blocked by Windows): $(Test-Path -LiteralPath "$sx`:Zone.Identifier" -ErrorAction SilentlyContinue)"
+        "Только чтение:   $((Get-Item $sx -ErrorAction SilentlyContinue).IsReadOnly)"
+        "Блокировка Win:  $(Test-Path -LiteralPath "$sx`:Zone.Identifier" -ErrorAction SilentlyContinue)"
     }
 
-    "--- Miami Graphics ---"
+    "=== MIAMI GRAPHICS ==="
     $mgDirs = @("$env:APPDATA\MiamiGraphics", "$env:LOCALAPPDATA\MiamiGraphics") | Where-Object { Test-Path $_ }
-    "MG installed: $([bool]$mgDirs) ($(if ($mgDirs) { $mgDirs -join '; ' } else { 'no folders found' }))"
+    "Установлен:      $([bool]$mgDirs) ($(if ($mgDirs) { $mgDirs -join '; ' } else { 'папки не найдены' }))"
     foreach ($d in $mgDirs) {
         $ver = Join-Path $d 'config\installed_version.txt'
-        if (Test-Path $ver) { "MG version:   $((Get-Content $ver -Raw).Trim()) (in $d)" }
+        if (Test-Path $ver) { "Версия MG:       $((Get-Content $ver -Raw).Trim())" }
     }
     foreach ($d in $mgDirs) {
         foreach ($f in @('optimization_baseline.json','config\optimization_baseline.json','gta_settings_preset.json','config\optimization_mods.json')) {
             $p = Join-Path $d $f
-            if (Test-Path $p) { "MG file:      $p ($((Get-Item $p).Length) bytes)" }
+            if (Test-Path $p) { "Файл MG:         $p ($((Get-Item $p).Length) байт)" }
         }
     }
-    "MG running:   $([bool](Get-Process | Where-Object { $_.Name -match 'Miami' }))"
+    "MG запущен:      $([bool](Get-Process | Where-Object { $_.Name -match 'Miami' }))"
     $snap = Join-Path $HelperDir 'mg_snapshot'
-    if (Test-Path $snap) { "MG snapshot:  $((Get-ChildItem $snap -File).Count) files (latest copies in $snap)" }
-    else { "MG snapshot:  none yet (created at first GTA5 launch)" }
+    if (Test-Path $snap) { "Снапшот MG:      $((Get-ChildItem $snap -File).Count) файлов (в $snap)" }
+    else { "Снапшот MG:      ещё нет (появится при первом запуске GTA5)" }
 
-    "--- Majestic ---"
+    "=== MAJESTIC ==="
     $mjJson = "$env:APPDATA\majestic-launcher\Multiplayer\majestic.json"
-    "Majestic config: $(if (Test-Path $mjJson) { $mjJson } else { 'not found' })"
+    "Конфиг Majestic: $(if (Test-Path $mjJson) { $mjJson } else { 'не найден' })"
     if (Test-Path $mjJson) {
-        try { "Majestic cache:  $((Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath)" } catch {}
+        try { "Кэш Majestic:    $((Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath)" } catch {}
     }
 
-    "Log tail:"
+    "=== ПОСЛЕДНИЕ СОБЫТИЯ ==="
     Get-Content $LogFile -Tail 8 -ErrorAction SilentlyContinue
     exit 0
 }
