@@ -478,7 +478,7 @@ while ($true) {
 
         if ($launcher -and -not $wasLauncher) {
             Log "Majestic launcher started"
-            Archive-VanillaBackup -Cfg $cfg
+            if ($cfg.autoArchiveBins) { Archive-VanillaBackup -Cfg $cfg }   # opt-in: race with Majestic patcher causes error 1002
         }
         $wasLauncher = $launcher
 
