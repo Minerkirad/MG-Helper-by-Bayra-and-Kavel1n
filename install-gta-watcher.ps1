@@ -226,6 +226,7 @@ if ($Diagnose) {
     $cfg = Get-MgConfig
 
     "=== ОБЩЕЕ ==="
+    "Версия MG Helper: $script:Version"
     "Папка пакета:    $HelperDir"
     "Эталон:          $Golden (есть: $(Test-Path $Golden))"
     "Конфиг:          $ConfigFile (есть: $(Test-Path $ConfigFile))"
@@ -286,12 +287,19 @@ if ($Diagnose) {
     "Конфиг Majestic: $(if ($mjJson) { $mjJson } else { 'не найден' })"
     if ($mjJson) {
         "Кэш Majestic:    $(Get-MajesticCachePath $mjJson)"
+        $gamePath = Get-MajesticGamePath $mjJson
+        if ($gamePath) { "Папка игры:     $gamePath" }
         $bkDir = Join-Path (Split-Path $mjJson) 'backup'
         if (Test-Path $bkDir) {
             $binCount = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
             "Бэкап .bin в папке лаунчера: $binCount шт. (0 = архивированы, >0 = ждать запуска лаунчера)"
         }
     }
+
+    "=== ВЕРСИЯ ИГРЫ ==="
+    $game = Find-GtaGameRoot
+    if ($game) { "GTA корень:      $($game.root)"; "Вариант:         $($game.variant)" }
+    else { "GTA корень:      не определён по реестру (Steam/Epic/Rockstar ключи не найдены)" }
 
     "=== ВЫВОДЫ (автоматические) ==="
     $concl = @()
