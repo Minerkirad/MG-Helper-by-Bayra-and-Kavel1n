@@ -11,6 +11,26 @@ Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue | Unblock-F
 
 $HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 
+# --- update check: GitHub Releases latest vs this package version (once per 24h, silent on errors) ---
+$PkgVersion = '1.4.1'
+$RepoSlug   = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
+$global:UpdateMessage = $null
+function Check-Updates {
+    try {
+        $chkFile = Join-Path $HelperDir 'update_check.txt'
+        if ((Test-Path $chkFile) -and (((Get-Date) - (Get-Item $chkFile).LastWriteTime).TotalHours -lt 24)) { return }
+        New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
+        Set-Content -LiteralPath $chkFile -Value (Get-Date -Format 'o') -ErrorAction Stop
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoSlug/releases/latest" -UseBasicParsing -TimeoutSec 10
+        $tag = ($rel.tag_name -replace '^v','')
+        if ($tag -and ($tag -ne $PkgVersion)) {
+            $global:UpdateMessage = "Доступна новая версия: v$tag (у тебя $PkgVersion). Скачай ZIP на $RepoSlug/releases"
+        }
+    } catch { }   # offline / rate limit / GitHub недоступен - просто молчим
+}
+Check-Updates
+
 function Confirm-It([string]$Text) {
     $r = Read-Host "$Text (да/нет)"
     return ($r -match '^(д|да|y|yes)$')
@@ -45,6 +65,7 @@ function Show-Menu {
     if ($sxOk) { Write-Host "найден" -ForegroundColor Green } else { Write-Host "НЕ НАЙДЕН" -ForegroundColor Red }
     Write-Host "  Miami Graph.: " -NoNewline
     if ($mgOk) { Write-Host "найден" -ForegroundColor Green } else { Write-Host "не найден" -ForegroundColor $(if ($installed) { 'Yellow' } else { 'DarkGray' }) }
+    if ($global:UpdateMessage) { Write-Host "  ОБНОВЛЕНИЕ:     $($global:UpdateMessage)" -ForegroundColor Yellow }
     Write-Host "=========================================================="
     Write-Host ""
     Write-Host "  [1] Установка          (запустить один раз)"
