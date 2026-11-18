@@ -55,7 +55,8 @@ function Show-Menu {
     Write-Host "  [6] Очистка кэша       (ВНИМАНИЕ: перекачка десятков ГБ)"
     Write-Host ""
     Write-Host "  [7] Диагностика + отчёт (если что-то не работает)"
-    Write-Host "  [8] Удалить всё"
+    Write-Host "  [8] Repair              (исправить типовые проблемы)"
+    Write-Host "  [9] Удалить всё"
     Write-Host ""
     Write-Host "  [0] Выход"
     Write-Host ""
@@ -80,7 +81,8 @@ while ($true) {
         }
         '6' { Run-Step "Clean cache" { & cmd /c "`"$(Join-Path $root '4-clean-cache.bat')`"" } }
         '7' { Run-Step "Diagnose" { & cmd /c "`"$(Join-Path $root '5-diagnose.bat')`"" } }
-        '8' {
+        '8' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
+        '9' {
             & cmd /c "`"$(Join-Path $root '0-uninstall.bat')`""
             Write-Host ""
             Write-Host "Удалено. Эту папку можно удалить."
@@ -89,7 +91,7 @@ while ($true) {
         }
         '0' { exit 0 }
         default {
-            Write-Host "Нет такого пункта. Введи цифру 0-8." -ForegroundColor Yellow
+            Write-Host "Нет такого пункта. Введи цифру 0-9." -ForegroundColor Yellow
             Start-Sleep -Seconds 1
         }
     }
