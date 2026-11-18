@@ -32,6 +32,7 @@ function Get-MgConfig {
         launcherProcesses = @('Majestic','MajesticLauncher','majestic-launcher')
         mgProcesses       = @('Miami','MiamiGraphics')
         useHotswapAgent   = $false
+        autoArchiveBins   = $false
     }
     if (Test-Path $script:ConfigFile) {
         try {
