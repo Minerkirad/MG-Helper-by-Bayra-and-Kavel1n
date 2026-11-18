@@ -293,6 +293,42 @@ if ($Diagnose) {
         }
     }
 
+    "=== ВЫВОДЫ (автоматические) ==="
+    $concl = @()
+    if (-not $sx) {
+        $concl += "[ПРОБЛЕМА] settings.xml не найден на этом ПК - запусти GTA V один раз, затем 1-install.bat."
+    }
+    if ($Golden -and (Test-Path $Golden)) {
+        $gRaw = Get-Content $Golden -Raw -ErrorAction SilentlyContinue
+        if ($gRaw -and (($gRaw -notmatch '<Settings>') -or ($gRaw -match '\$\d'))) {
+            $concl += "[ПРОБЛЕМА] эталон settings.golden.xml повреждён - watcher применит его только после восстановления (запусти 2-reset-settings.bat)."
+        }
+    }
+    if ($sx -and ((Get-Item $sx -ErrorAction SilentlyContinue).IsReadOnly)) {
+        $concl += "[ПРОБЛЕМА] settings.xml только для чтения - watcher сам снимет атрибут при запуске игры."
+    }
+    if (-not $mgDirs) {
+        $concl += "[ИНФО] Miami Graphics не найден - графика MG не установлена (пакет защищает только базовые настройки)."
+    }
+    $optFile2 = if ($mgDirs) { Join-Path $mgDirs[0] 'config\optimization_mods.json' } else { $null }
+    if ($optFile2 -and (Test-Path $optFile2)) {
+        $optRaw2 = ((Get-Content $optFile2 -Raw -ErrorAction SilentlyContinue) -replace '\s','')
+        if ($optRaw2.Length -le 40) { $concl += "[ВНИМАНИЕ] оптимизация MG выключена или не настроена (optimization_mods.json почти пуст)." }
+    }
+    $watchProc = @(Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID })
+    $autostartOk = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue).GTASettingsWatcher
+    $watchdogOk = (schtasks /Query /TN "MG_Helper_Watchdog" 2>&1 | Out-String) -match 'MG_Helper_Watchdog'
+    if (-not $autostartOk) { $concl += "[ПРОБЛЕМА] автозапуск watcher'а удалён из реестра - запусти 1-install.bat." }
+    if (-not $watchdogOk) { $concl += "[ПРОБЛЕМА] watchdog-задача отсутствует - watcher не перезапустится после смерти." }
+    $logAge = if (Test-Path $LogFile) { ((Get-Date) - (Get-Item $LogFile).LastWriteTime).TotalMinutes } else { 99999 }
+    if ($logAge -gt 120) { $concl += "[ВНИМАНИЕ] watcher.log не обновлялся $([int]$logAge) минут - возможно, watcher не работает." }
+    if ($concl.Count -eq 0) { $concl += "Всё в порядке - проблем не найдено." }
+    $concl | ForEach-Object {
+        if ($_ -match '^\[ПРОБЛЕМА\]') { Write-Host "  $_" -ForegroundColor Red }
+        elseif ($_ -match '^\[ВНИМАНИЕ\]') { Write-Host "  $_" -ForegroundColor Yellow }
+        else { Write-Host "  $_" -ForegroundColor Green }
+    }
+
     "=== ПОДСКАЗКИ (если графика/оптимизация MG 'не работает') ==="
     " 1. Мод должен быть УСТАНОВЛЕН через лаунчер MG (каталог Redux),"
     "    а не просто скачан - иначе файлы игры не изменены."
@@ -417,6 +453,7 @@ if ($current -ne $expected) {
 $wasRunning = $false
 $wasLauncher = $false
 $errStreak = 0
+$lastBeat = Get-Date
 
 while ($true) {
     Start-Sleep -Seconds 5
@@ -460,6 +497,11 @@ while ($true) {
         }
         $wasRunning = $running
         $errStreak = 0
+        # heartbeat: one line per 30 min proves the watcher is alive even without events
+        if (((Get-Date) - $lastBeat).TotalMinutes -ge 30) {
+            Log "heartbeat: alive (settings: $($cfg.settingsXml))"
+            $lastBeat = Get-Date
+        }
     } catch {
         $errStreak++
         Log "[!] Error ($errStreak in a row): $_"
