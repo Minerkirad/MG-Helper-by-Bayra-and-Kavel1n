@@ -13,7 +13,7 @@
 
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
-$script:Version = '1.4.0'
+$script:Version = '1.4.1'
 # CIM command-line scan is expensive - throttle it (min interval + cached result)
 $script:lastCimScan = [datetime]::MinValue
 $script:lastCimHits = @()
