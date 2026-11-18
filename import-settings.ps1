@@ -1,35 +1,39 @@
 ﻿# Imports a personal settings.xml into the golden backup and applies it now.
 # The person's own settings become the permanent ones the watcher protects.
 # Usage: put your settings.xml next to this script, run the bat.
+# Universal v5: reads config.json first, falls back to discovery.
 # by Bayra & Kavel1n
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'Import My Settings - by Bayra & Kavel1n'
 
-$HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
-$Golden    = Join-Path $HelperDir 'settings.golden.xml'
-$Src       = Join-Path $PSScriptRoot 'settings.xml'
+$HelperDir  = Join-Path $env:LOCALAPPDATA 'MG_Helper'
+$Golden     = Join-Path $HelperDir 'settings.golden.xml'
+$ConfigFile = Join-Path $HelperDir 'config.json'
+$Src        = Join-Path $PSScriptRoot 'settings.xml'
 
-function Find-SettingsXml {
-    $docsRoots = @(
-        [Environment]::GetFolderPath('MyDocuments'),
-        "$env:USERPROFILE\OneDrive\Documents",
-        "$env:USERPROFILE\Documents"
-    )
-    foreach ($one in (Get-ChildItem "$env:USERPROFILE" -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)) {
-        $docsRoots += (Join-Path $one.FullName 'Documents')
+# --- load universal discovery when available ---
+$common = $null
+if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'common.ps1'))) {
+    $common = Join-Path $PSScriptRoot 'common.ps1'
+} elseif (Test-Path -LiteralPath (Join-Path $HelperDir 'common.ps1')) {
+    $common = Join-Path $HelperDir 'common.ps1'
+}
+if ($common) { . $common } else {
+    function Find-SettingsXml {
+        foreach ($d in @([Environment]::GetFolderPath('MyDocuments'), "$env:USERPROFILE\OneDrive\Documents", "$env:USERPROFILE\Documents")) {
+            $c = Join-Path $d 'Rockstar Games\GTA V\settings.xml'
+            if (Test-Path $c) { return $c }
+        }
+        return $null
     }
-    foreach ($d in ($docsRoots | Select-Object -Unique)) {
-        $c = Join-Path $d 'Rockstar Games\GTA V\settings.xml'
-        if ($c -and (Test-Path $c)) { return $c }
-    }
-    $hits = Get-ChildItem "$env:USERPROFILE" -Recurse -Depth 5 -Filter 'settings.xml' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match 'Rockstar Games\\GTA V' } |
-        Sort-Object LastWriteTime -Descending
-    if ($hits) { return $hits[0].FullName }
-    return $null
 }
 
-$Settings = Find-SettingsXml
+$Settings = $null
+if (Test-Path $ConfigFile) {
+    try { $cfg = Get-Content $ConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $cfg = $null }
+    if ($cfg -and $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)) { $Settings = $cfg.settingsXml }
+}
+if (-not $Settings) { $Settings = Find-SettingsXml }
 
 if (-not (Test-Path $Golden)) {
     Write-Host "[!] Golden not found. Run 1-install.bat first." -ForegroundColor Red
@@ -38,6 +42,11 @@ if (-not (Test-Path $Golden)) {
 if (-not (Test-Path $Src)) {
     Write-Host "[!] settings.xml not found next to this script." -ForegroundColor Red
     Write-Host "    Put your personal settings.xml into the same folder as the bat and run again."
+    pause; exit 1
+}
+if (-not $Settings) {
+    Write-Host "[!] Current settings.xml not found on this PC." -ForegroundColor Red
+    Write-Host "    Run GTA V once, or put the path into $ConfigFile (settingsXml)." -ForegroundColor DarkGray
     pause; exit 1
 }
 
