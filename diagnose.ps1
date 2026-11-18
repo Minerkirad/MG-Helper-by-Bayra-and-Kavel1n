@@ -30,7 +30,17 @@ if (-not $found) {
 
 Write-Host "[i] Watcher found: $found"
 Write-Host "=================================================="
-& powershell -NoProfile -ExecutionPolicy Bypass -File $found -Diagnose
+
+# capture diagnose output: shown on screen AND saved to a report file ready to send
+$repFile = Join-Path (Split-Path $found) 'report.txt'
+$rep = & powershell -NoProfile -ExecutionPolicy Bypass -File $found -Diagnose 2>&1
+$rep | ForEach-Object { $_.ToString() } | Write-Host
+$stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+$header = "MG Helper diagnostic report - $stamp - by Bayra & Kavel1n"
+$header + "`r`n" + (($rep | ForEach-Object { $_.ToString() }) -join "`r`n") |
+    Out-File (Join-Path (Split-Path $found) "report_$stamp.txt") -Encoding UTF8
+
 Write-Host "=================================================="
-Write-Host "Send ALL of the output above to Bayra / Kavel1n."
+Write-Host "[+] Report saved: report_$stamp.txt (in the watcher folder)" -ForegroundColor Green
+Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
 pause
