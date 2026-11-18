@@ -31,16 +31,39 @@ if (-not $found) {
 Write-Host "[i] Watcher found: $found"
 Write-Host "=================================================="
 
-# capture diagnose output: shown on screen AND saved to a report file ready to send
-$repFile = Join-Path (Split-Path $found) 'report.txt'
+# capture diagnose output: shown on screen AND saved to a report bundle ready to send
+$watcherDir = Split-Path $found
 $rep = & powershell -NoProfile -ExecutionPolicy Bypass -File $found -Diagnose 2>&1
 $rep | ForEach-Object { $_.ToString() } | Write-Host
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 $header = "MG Helper diagnostic report - $stamp - by Bayra & Kavel1n"
 $header + "`r`n" + (($rep | ForEach-Object { $_.ToString() }) -join "`r`n") |
-    Out-File (Join-Path (Split-Path $found) "report_$stamp.txt") -Encoding UTF8
+    Out-File (Join-Path $watcherDir "report_$stamp.txt") -Encoding UTF8
+
+# enrich the report: config, longer log, snapshot list, archive listing, versions
+$extra = @()
+$extra += ""
+$extra += "=== ОКРУЖЕНИЕ ==="
+$extra += "OS:     $([Environment]::OSVersion.VersionString)"
+$extra += "PS:     $($PSVersionTable.PSVersion)"
+$extra += "Диск C свободно: $([int]((Get-PSDrive C -ErrorAction SilentlyContinue).Free / 1GB)) ГБ"
+$extra += ""
+$extra += "=== CONFIG.JSON ==="
+$extra += (Get-Content (Join-Path $watcherDir 'config.json') -Raw -ErrorAction SilentlyContinue)
+$extra += ""
+$extra += "=== WATCHER.LOG (последние 40 строк) ==="
+$extra += (Get-Content (Join-Path $watcherDir 'watcher.log') -Tail 40 -ErrorAction SilentlyContinue)
+$extra += ""
+$extra += "=== MG SNAPSHOT ==="
+$extra += (Get-ChildItem (Join-Path $watcherDir 'mg_snapshot') -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) ($($_.Length) байт)" })
+$extra += ""
+$extra += "=== VANILLA BACKUP ARCHIVE ==="
+$extra += (Get-ChildItem (Join-Path $watcherDir 'vanilla_backup_archive') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) ($([int]($_.Length / 1MB)) МБ)" })
+$extra | Add-Content (Join-Path $watcherDir "report_$stamp.txt") -Encoding UTF8
 
 Write-Host "=================================================="
 Write-Host "[+] Report saved: report_$stamp.txt (in the watcher folder)" -ForegroundColor Green
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
+# open Explorer with the report file selected
+Start-Process explorer.exe "/select,`"$watcherDir\report_$stamp.txt`""
 pause
