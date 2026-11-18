@@ -108,6 +108,12 @@ if (Test-Path -LiteralPath $common) {
 }
 
 function Log($msg) {
+    # rotate: keep one .old generation when the log grows past 1 MB
+    try {
+        if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 1MB)) {
+            Move-Item $LogFile "$LogFile.old" -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $msg" | Out-File $LogFile -Append -Encoding UTF8
 }
 
@@ -304,13 +310,94 @@ if ($Diagnose) {
     exit 0
 }
 
+# ---------------- golden self-heal + atomic writes ----------------
+function Test-GoldenValid {
+    # golden must be a plausible settings.xml, never empty/truncated
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        return ($raw.Length -gt 100 -and $raw -match '<Settings>' -and ($raw -notmatch '\$\d'))
+    } catch { return $false }
+}
+
+function Get-ValidGolden {
+    # returns the first VALID golden source: golden -> .bak -> before_apply.bak
+    param([string]$CfgSettingsXml)
+    $chain = @(
+        $Golden,
+        "$Golden.bak",
+        (Join-Path $HelperDir 'settings.before_apply.bak'),
+        $CfgSettingsXml
+    )
+    foreach ($c in ($chain | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-GoldenValid $c) { return @{ path = $c; healed = ($c -ne $Golden) } }
+    }
+    return $null
+}
+
+function Write-Atomic {
+    # temp file + Replace, retry 3x on IOException (game holding the file open)
+    param([string]$Path, [byte[]]$Bytes)
+    $tmp = "$Path.mgtmp"
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            [IO.File]::WriteAllBytes($tmp, $Bytes)
+            if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, $null) }
+            else { Move-Item $tmp $Path -Force }
+            return $true
+        } catch {
+            Start-Sleep -Seconds 1
+        }
+    }
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    Log "[!] could not write $Path (locked?) - skipped"
+    return $false
+}
+
+function Apply-Golden {
+    # resolves a valid golden (self-heal chain) and atomically applies it
+    param($Cfg)
+    $src = Get-ValidGolden -CfgSettingsXml $Cfg.settingsXml
+    if (-not $src) {
+        Log "[!] no valid golden source found - nothing applied (golden NOT overwritten)"
+        return $false
+    }
+    if ($src.healed) {
+        Copy-Item $src.path $Golden -Force
+        Log "[i] golden was corrupt - healed from $($src.path)"
+    }
+    $goldenBytes = [IO.File]::ReadAllBytes($Golden)
+    if (Write-Atomic -Path $Cfg.settingsXml -Bytes $goldenBytes) {
+        return $true
+    }
+    return $false
+}
+
 # ---------------- watcher runtime ----------------
+# single-instance mutex (watchdog task may start extra instances - they exit here)
+$mutex = New-Object System.Threading.Mutex($false, 'Global\MG_Helper_Watcher')
+$mutexOk = $mutex.WaitOne(0)
+if (-not $mutexOk) { exit 0 }
+
 $cfg = Resolve-MgPaths
 if ($cfg -and $cfg.settingsXml) {
-    Log "Watcher v5 started (settings: $($cfg.settingsXml))"
+    Log "Watcher v5.1 started (settings: $($cfg.settingsXml))"
 } else {
     Log "[!] settings.xml not found - edit $ConfigFile to set it manually"
     exit 1
+}
+
+# unclean-shutdown detection: bins archived but nothing running since boot
+$binsLeft = $null
+$bkDir = Get-MajesticBackupDir $cfg
+if ($bkDir) {
+    $binsLeft = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
+}
+$arcDir = Join-Path $HelperDir 'vanilla_backup_archive'
+$archived = (Get-ChildItem $arcDir -Directory -ErrorAction SilentlyContinue | Measure-Object).Count
+if ((Test-Path $arcDir) -and $archived -gt 0 -and -not (Get-Process -Name 'GTA5' -ErrorAction SilentlyContinue)) {
+    Log "[i] unclean previous session detected (archived bins not restored) - will restore on next exit"
 }
 
 if (-not (Test-Path $Golden)) {
@@ -329,6 +416,7 @@ if ($current -ne $expected) {
 
 $wasRunning = $false
 $wasLauncher = $false
+$errStreak = 0
 
 while ($true) {
     Start-Sleep -Seconds 5
@@ -358,27 +446,29 @@ while ($true) {
             }
             Copy-Item $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force
             Archive-VanillaBackup -Cfg $cfg   # fallback in case launcher was already running before the watcher
-            $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-            [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
-            Log "GTA5 launched -> settings applied"
+            if (Apply-Golden -Cfg $cfg) { Log "GTA5 launched -> settings applied" }
             Clean-Dlccache -Cfg $cfg
             Start-Sleep -Seconds 3
             if ((Get-Process -Name $cfg.gameProcesses -ErrorAction SilentlyContinue) -and -not ((Get-Content $cfg.settingsXml -Raw) -ceq (Get-Content $Golden -Raw))) {
-                $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-                [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
-                Log "settings re-applied (was overwritten after launch)"
+                if (Apply-Golden -Cfg $cfg) { Log "settings re-applied (was overwritten after launch)" }
             }
         }
         elseif (-not $running -and $wasRunning) {
             Start-Sleep -Seconds 3
-            $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-            [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
-            Log "GTA5 closed -> settings restored"
+            if (Apply-Golden -Cfg $cfg) { Log "GTA5 closed -> settings restored" }
             Restore-VanillaBackup -Cfg $cfg
         }
         $wasRunning = $running
+        $errStreak = 0
     } catch {
-        Log "[!] Error: $_"
+        $errStreak++
+        Log "[!] Error ($errStreak in a row): $_"
+        # self-restart after repeated failures (clears corrupted state)
+        if ($errStreak -ge 3) {
+            Log "[!] 3 consecutive errors - restarting watcher"
+            Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
+            exit 1
+        }
     }
 }
 '@
@@ -446,20 +536,8 @@ pause
 '@
 
 # ------------------------------------------------------------
-# 4. uninstaller (deployed as uninstall-watcher.ps1)
+# 4. uninstaller source lives in uninstall.ps1 (copied to MG_Helper in step 5)
 # ------------------------------------------------------------
-$uninstallCode = @'
-# Removes autostart entry and stops the watcher. Keeps your backups.
-# by Bayra & Kavel1n
-$host.UI.RawUI.WindowTitle = 'MG Helper - Uninstall'
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "GTASettingsWatcher" -ErrorAction SilentlyContinue
-Write-Host "[+] Watcher stopped, autostart removed." -ForegroundColor Green
-Write-Host "    Backups kept in %LOCALAPPDATA%\MG_Helper"
-pause
-'@
 
 # ------------------------------------------------------------
 # 5. deploy: common module + scripts, UTF-8 with BOM (PS 5.1)
@@ -511,6 +589,11 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
 $runValue = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
 New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "GTASettingsWatcher" -Value $runValue -PropertyType String -Force | Out-Null
 Write-Host "[+] Added to Windows autostart." -ForegroundColor Green
+
+# watchdog: every 10 minutes relaunch the watcher if it died (mutex prevents duplicates)
+$watchdogTr = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
+schtasks /Create /F /SC MINUTE /MO 10 /TN "MG_Helper_Watchdog" /TR $watchdogTr | Out-Null
+Write-Host "[+] Watchdog task added (relaunches the watcher every 10 min if it died)." -ForegroundColor Green
 
 Start-Process powershell -ArgumentList '-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$watcherDst`"" -WindowStyle Hidden
 Start-Sleep 4
