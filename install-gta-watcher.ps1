@@ -220,6 +220,27 @@ function Restore-VanillaBackup {
     }
 }
 
+
+function Ensure-BinsRestored {
+    # safety net: vanilla bins must be present in the launcher backup dir
+    # BEFORE Majestic patches the game - otherwise patcher fails with
+    # "Rockstar Games SDK (code 1002)". Auto-restore from our archive.
+    try {
+        $bkDir = Get-MajesticBackupDir $Cfg
+        if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return }
+        $bins = Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue
+        if (@($bins).Count -gt 0) { return }   # bins present - nothing to do
+        $arcRoot = Join-Path $HelperDir 'vanilla_backup_archive'
+        $latest = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+        if (-not $latest) { return }
+        $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
+        if (-not $files) { return }
+        $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        Log ("[i] vanilla bins auto-restored from archive ({0} file(s))" -f $files.Count)
+    } catch {
+        Log "[!] Ensure-BinsRestored error: $_"
+    }
+}
 # ---------------- diagnose mode ----------------
 if ($Diagnose) {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -478,7 +499,7 @@ while ($true) {
 
         if ($launcher -and -not $wasLauncher) {
             Log "Majestic launcher started"
-            if ($cfg.autoArchiveBins) { Archive-VanillaBackup -Cfg $cfg }   # opt-in: race with Majestic patcher causes error 1002
+            Ensure-BinsRestored -Cfg $cfg   # safety: return vanilla bins BEFORE patching
         }
         $wasLauncher = $launcher
 
@@ -490,7 +511,6 @@ while ($true) {
                 Log "settings.xml was read-only - attribute cleared"
             }
             Copy-Item $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force
-            if ($cfg.autoArchiveBins) { Archive-VanillaBackup -Cfg $cfg }   # opt-in: autoArchiveBins=true in config.json (can race with Majestic patcher -> error 1002)
             if (Apply-Golden -Cfg $cfg) { Log "GTA5 launched -> settings applied" }
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             Start-Sleep -Seconds 3
@@ -655,3 +675,4 @@ if (Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object
     Write-Host "[!] Watcher failed to start." -ForegroundColor Red
 }
 pause
+
