@@ -1,20 +1,39 @@
-﻿# Cleans the whole Majestic asset cache (on demand).
+﻿# Cleans the whole Majestic asset cache (on demand). Universal discovery.
 # by Bayra & Kavel1n
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$host.UI.RawUI.WindowTitle = 'Majestic Cache Cleaner - by Bayra & Kavel1n'
+$host.UI.RawUI.WindowTitle = 'MG Helper - Clean Cache'
 
 $cachePath = $null
-$mjJson = "$env:APPDATA\majestic-launcher\Multiplayer\majestic.json"
+$cfgPath = Join-Path $env:LOCALAPPDATA 'MG_Helper\config.json'
+$mjJson  = Join-Path $env:APPDATA 'majestic-launcher\Multiplayer\majestic.json'
+if (Test-Path $cfgPath) {
+    try {
+        $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        if ($cfg.majesticJson -and (Test-Path -LiteralPath $cfg.majesticJson)) { $mjJson = $cfg.majesticJson }
+    } catch {}
+}
 if (Test-Path $mjJson) {
-    try { $cachePath = (Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath } catch {}
+    try {
+        $j = Get-Content $mjJson -Raw | ConvertFrom-Json
+        foreach ($k in @('cachePath','cache','CachePath','cache_path')) {
+            if ($j.$k) { $cachePath = ($j.$k -replace '"',''); break }
+        }
+    } catch {}
 }
 if (-not $cachePath -or -not (Test-Path $cachePath)) {
     Write-Host "[!] Majestic cache folder not found." -ForegroundColor Red
+    Write-Host "    Check that Majestic was started at least once."
     pause; exit 1
 }
 
-if (Get-Process GTA5, 'Majestic Launcher' -ErrorAction SilentlyContinue) {
-    Write-Host "[!] Majestic or GTA5 is running. Close them first!" -ForegroundColor Red
+if (Get-Process GTA5 -ErrorAction SilentlyContinue) {
+    Write-Host "[!] GTA5 is running. Close it first!" -ForegroundColor Red
+    pause; exit 1
+}
+$majesticProc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'majestic' }
+if ($majesticProc) {
+    Write-Host "[!] Majestic is running. Close it first!" -ForegroundColor Red
     pause; exit 1
 }
 
