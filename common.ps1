@@ -31,7 +31,7 @@ function Get-MgConfig {
     if (Test-Path $script:ConfigFile) {
         try {
             $loaded = Get-Content $script:ConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json
-            foreach ($p in $cfg.Keys) {
+            foreach ($p in @($cfg.Keys)) {
                 if ($null -ne $loaded.$p) { $cfg[$p] = $loaded.$p }
             }
         } catch {
@@ -47,7 +47,11 @@ function Save-MgConfig {
     try {
         New-Item -ItemType Directory -Force -Path $script:HelperDir -ErrorAction Stop | Out-Null
         $json = $Config | ConvertTo-Json -Depth 4
-        [IO.File]::WriteAllText($script:ConfigFile, $json, [Text.UTF8Encoding]::new($false))
+        # near-atomic replace: no torn reads while the watcher re-reads the config
+        $tmp = "$script:ConfigFile.tmp"
+        [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
+        Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $tmp $script:ConfigFile -Force
     } catch {
         Write-Host "[i] could not save config: $($_.Exception.Message)" -ForegroundColor DarkGray
     }
