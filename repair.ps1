@@ -1,6 +1,7 @@
 ﻿# MG Helper repair - fixes typical problems on demand.
-# Only safe operations: re-discovery, golden restore chain, attribute fixes,
-# autostart/watchdog re-registration. Touching Majestic's .bin needs confirmation.
+# Re-runs the installer (single source of truth for scripts/config/watcher),
+# heals golden, clears read-only, restarts the watcher.
+# Optional: vanilla .bin restore with confirmation.
 # by Bayra & Kavel1n
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'MG Helper - Repair'
@@ -17,15 +18,15 @@ Write-Host " MG Helper repair - by Bayra & Kavel1n"
 Write-Host "============================================="
 Write-Host ""
 
-# --- 1. full path re-discovery + config re-save ---
-$cfg = Resolve-MgPaths -ForceFull
-if ($cfg.settingsXml) { $results += @{ ok = $true;  msg = "Пути переопределены: settings.xml найден" } }
+# --- 0. settings.xml location (re-discover) ---
+$cfg0 = Resolve-MgPaths -ForceFull
+if ($cfg0.settingsXml) { $results += @{ ok = $true;  msg = "Пути переопределены: settings.xml найден" } }
 else {                  $results += @{ ok = $false; msg = "settings.xml НЕ найден на этом ПК - запусти GTA V один раз" } }
 
-# --- 2. golden self-heal chain ---
+# --- 1. golden self-heal chain (BEFORE installer, so the installer migrates the healed golden) ---
 $Golden = Join-Path $HelperDir 'settings.golden.xml'
 $gSrc = $null
-$chain = @($Golden, "$Golden.bak", (Join-Path $HelperDir 'settings.before_apply.bak'), $cfg.settingsXml) |
+$chain = @($Golden, "$Golden.bak", (Join-Path $HelperDir 'settings.before_apply.bak'), $cfg0.settingsXml) |
     Where-Object { $_ } | Select-Object -Unique
 foreach ($c in $chain) {
     try {
@@ -34,61 +35,39 @@ foreach ($c in $chain) {
     } catch {}
 }
 if ($gSrc -and ($gSrc -ne $Golden)) {
+    New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
     Copy-Item $gSrc $Golden -Force
     $results += @{ ok = $true;  msg = "Эталон восстановлен из $((Split-Path $gSrc -Leaf))" }
 }
 elseif ($gSrc) { $results += @{ ok = $true;  msg = "Эталон валиден - восстановление не потребовалось" } }
 else {              $results += @{ ok = $false; msg = "Ни одного валидного источника эталона не найдено" } }
 
-# --- 3. read-only attribute on settings.xml ---
-if ($cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)) {
-    $item = Get-Item -LiteralPath $cfg.settingsXml
+# --- 2. read-only attribute on settings.xml ---
+if ($cfg0.settingsXml -and (Test-Path -LiteralPath $cfg0.settingsXml)) {
+    $item = Get-Item -LiteralPath $cfg0.settingsXml
     if ($item.IsReadOnly) {
-        Set-ItemProperty -LiteralPath $cfg.settingsXml -Name IsReadOnly -Value $false
+        Set-ItemProperty -LiteralPath $cfg0.settingsXml -Name IsReadOnly -Value $false
         $results += @{ ok = $true;  msg = "Атрибут 'только чтение' снят с settings.xml" }
     } else { $results += @{ ok = $true;  msg = "settings.xml доступен для записи" } }
 }
 
-# --- 4. re-deploy common + watcher scripts from the package ---
-foreach ($pair in @(
-        @{ Src = 'common.ps1'; Dst = 'common.ps1' }
-        @{ Src = 'gta-settings-watcher.ps1'; Dst = 'gta-settings-watcher.ps1' }
-    )) {
-    $srcFile = Join-Path $root $pair.Src
-    if (Test-Path -LiteralPath $srcFile) {
-        Copy-Item $srcFile (Join-Path $HelperDir $pair.Dst) -Force
-    }
+# --- 3. re-run installer (deploys watcher + common + config + autostart + watchdog) ---
+$installer = Join-Path $root 'install-gta-watcher.ps1'
+if (-not (Test-Path -LiteralPath $installer)) {
+    Write-Host "[!] install-gta-watcher.ps1 не найден в папке пакета - переустанови пакет целиком." -ForegroundColor Red
+    pause; exit 1
 }
-$results += @{ ok = $true;  msg = "Скрипты наблюдателя обновлены из пакета" }
+'' | powershell -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1 | ForEach-Object { Write-Host "  $_" }
 
-# --- 5. autostart (HKCU Run) ---
-$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-$watcherDst = Join-Path $HelperDir 'gta-settings-watcher.ps1'
-$expected = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
-$cur = (Get-ItemProperty $runKey -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue).GTASettingsWatcher
-if ($cur -ne $expected) {
-    New-ItemProperty $runKey -Name 'GTASettingsWatcher' -Value $expected -PropertyType String -Force | Out-Null
-    $results += @{ ok = $true;  msg = "Автозапуск пересоздан (был удалён или повреждён)" }
-} else { $results += @{ ok = $true;  msg = "Автозапуск в порядке" } }
-
-# --- 6. watchdog scheduled task ---
-schtasks /Create /F /SC MINUTE /MO 10 /TN "MG_Helper_Watchdog" /TR $expected 2>&1 | Out-Null
-$schOk = (schtasks /Query /TN "MG_Helper_Watchdog" 2>&1 | Out-String) -match 'MG_Helper_Watchdog'
-if ($schOk) { $results += @{ ok = $true;  msg = "Watchdog-задача на месте (перезапуск каждые 10 минут)" } }
-else { $results += @{ ok = $false; msg = "Watchdog-задача не создалась (нет прав?)" } }
-
-# --- 7. restart the watcher (needs killing the old process - with confirmation) ---
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Process powershell -ArgumentList '-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$watcherDst`"" -WindowStyle Hidden
+# --- 4. verify watcher process is alive after installer restart ---
 Start-Sleep 4
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'gta-settings-watcher' })
+$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' })
 if ($alive.Count -gt 0) { $results += @{ ok = $true;  msg = "Наблюдатель перезапущен (PID $($alive[0].ProcessId))" } }
-else { $results += @{ ok = $false; msg = "Наблюдатель не запустился - пришли отчёт из 5-diagnose.bat" } }
+else { $results += @{ ok = $false; msg = "Наблюдатель не запустился - пришли отчёт из Диагностики" } }
 
-# --- 8. vanilla .bin restore (optional, with confirmation) ---
-$bkDir = Get-MajesticBackupDir $cfg
+# --- 5. vanilla .bin restore (optional, with confirmation) ---
+$cfg1 = Get-MgConfig
+$bkDir = Get-MajesticBackupDir $cfg1
 if ($bkDir -and (Test-Path $bkDir)) {
     $binsInLauncher = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
     if ($binsInLauncher -eq 0) {
@@ -98,7 +77,7 @@ if ($bkDir -and (Test-Path $bkDir)) {
         Write-Host "    (MG-графика будет перезаписана ванилью при следующем запуске)." -ForegroundColor Yellow
         $r = Read-Host "Вернуть .bin в лаунчер? (да/нет)"
         if ($r -match '^(д|да|y|yes)$') {
-            Restore-VanillaBackup -Cfg $cfg
+            Restore-VanillaBackup -Cfg $cfg1
             $results += @{ ok = $true;  msg = "Vanilla .bin возвращены в лаунчер" }
         } else {
             $results += @{ ok = $true;  msg = ".bin остались в архиве (MG-графика защищена)" }
