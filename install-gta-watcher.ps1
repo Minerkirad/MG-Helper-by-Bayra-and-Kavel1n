@@ -492,7 +492,7 @@ while ($true) {
             Copy-Item $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force
             if ($cfg.autoArchiveBins) { Archive-VanillaBackup -Cfg $cfg }   # opt-in: autoArchiveBins=true in config.json (can race with Majestic patcher -> error 1002)
             if (Apply-Golden -Cfg $cfg) { Log "GTA5 launched -> settings applied" }
-            Clean-Dlccache -Cfg $cfg
+            if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             Start-Sleep -Seconds 3
             if ((Get-Process -Name $cfg.gameProcesses -ErrorAction SilentlyContinue) -and -not ((Get-Content $cfg.settingsXml -Raw) -ceq (Get-Content $Golden -Raw))) {
                 if (Apply-Golden -Cfg $cfg) { Log "settings re-applied (was overwritten after launch)" }
