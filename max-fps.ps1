@@ -1,0 +1,108 @@
+﻿# MAX FPS graphics profile - by Bayra & Kavel1n
+# Applies the highest-FPS graphics values to golden + current settings.
+# Video block (resolution/GPU) is never touched. Backup kept.
+# Universal v5: golden lives in %LOCALAPPDATA%\MG_Helper, paths from config.json.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$host.UI.RawUI.WindowTitle = 'MAX FPS Profile - by Bayra & Kavel1n'
+
+$HelperDir  = Join-Path $env:LOCALAPPDATA 'MG_Helper'
+$Golden     = Join-Path $HelperDir 'settings.golden.xml'
+$ConfigFile = Join-Path $HelperDir 'config.json'
+
+# --- load universal discovery when available ---
+$common = $null
+if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'common.ps1'))) {
+    $common = Join-Path $PSScriptRoot 'common.ps1'
+} elseif (Test-Path -LiteralPath (Join-Path $HelperDir 'common.ps1')) {
+    $common = Join-Path $HelperDir 'common.ps1'
+}
+if ($common) { . $common } else {
+    function Find-SettingsXml {
+        foreach ($d in @([Environment]::GetFolderPath('MyDocuments'), "$env:USERPROFILE\OneDrive\Documents", "$env:USERPROFILE\Documents")) {
+            $c = Join-Path $d 'Rockstar Games\GTA V\settings.xml'
+            if (Test-Path $c) { return $c }
+        }
+        return $null
+    }
+}
+
+$Settings = $null
+if (Test-Path $ConfigFile) {
+    try { $cfg = Get-Content $ConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $cfg = $null }
+    if ($cfg -and $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)) { $Settings = $cfg.settingsXml }
+}
+if (-not $Settings) { $Settings = Find-SettingsXml }
+
+if (-not ((Test-Path $Golden) -and (Test-Path $Settings))) {
+    Write-Host "[!] golden or settings.xml not found" -ForegroundColor Red
+    Write-Host "    Run 1-install.bat first, or check the paths in $ConfigFile" -ForegroundColor DarkGray
+    pause; exit 1
+}
+
+$values = [ordered]@{
+    'Tessellation'                  = '0'
+    'LodScale'                      = '0.000000'
+    'PedLodBias'                    = '-0.500000'
+    'VehicleLodBias'                = '-0.500000'
+    'ShadowQuality'                 = '0'
+    'ReflectionQuality'             = '0'
+    'ReflectionMSAA'                = '0'
+    'SSAO'                          = '0'
+    'AnisotropicFiltering'          = '0'
+    'MSAA'                          = '0'
+    'MSAAFragments'                 = '0'
+    'MSAAQuality'                   = '0'
+    'SamplingMode'                  = '0'
+    'TextureQuality'                = '0'
+    'ParticleQuality'               = '0'
+    'WaterQuality'                  = '0'
+    'GrassQuality'                  = '0'
+    'ShaderQuality'                 = '0'
+    'Shadow_SoftShadows'            = '0'
+    'UltraShadows_Enabled'          = 'false'
+    'Shadow_ParticleShadows'        = 'false'
+    'Shadow_Distance'               = '1.000000'
+    'Shadow_LongShadows'            = 'false'
+    'Shadow_SplitZStart'            = '0.930000'
+    'Shadow_SplitZEnd'              = '0.890000'
+    'Shadow_aircraftExpWeight'      = '-3.000000'
+    'Shadow_DisableScreenSizeCheck' = 'false'
+    'Reflection_MipBlur'            = 'false'
+    'FXAA_Enabled'                  = 'false'
+    'TXAA_Enabled'                  = 'false'
+    'Lighting_FogVolumes'           = 'false'
+    'Shader_SSA'                    = 'false'
+    'DX_Version'                    = '2'
+    'CityDensity'                   = '0.000000'
+    'PedVarietyMultiplier'          = '0.000000'
+    'VehicleVarietyMultiplier'      = '0.000000'
+    'PostFX'                        = '0'
+    'DoF'                           = 'false'
+    'HdStreamingInFlight'           = 'false'
+    'MaxLodScale'                   = '0.000000'
+    'MotionBlurStrength'            = '0.000000'
+}
+
+$stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+Copy-Item $Golden (Join-Path $HelperDir "settings.golden.xml.before_maxfps_$stamp") -Force
+Copy-Item $Settings (Join-Path $HelperDir "settings.xml.before_maxfps_$stamp") -Force
+
+$applied = 0
+foreach ($file in @($Golden, $Settings)) {
+    $s = Get-Content $file -Raw
+    foreach ($k in $values.Keys) {
+        $pattern = "(?<=<$k value=`")[^`"]*(?=`")"
+        if ($s -match $pattern) { $s = [regex]::Replace($s, $pattern, $values[$k]); $applied++ }
+    }
+    if ($s -match '\$\d') {
+        Write-Host "[!] corrupt merge - aborted, nothing changed" -ForegroundColor Red
+        pause; exit 1
+    }
+    [IO.File]::WriteAllText($file, $s, [Text.UTF8Encoding]::new($true))
+}
+
+Write-Host "[+] MAX FPS profile applied ($applied values per file)" -ForegroundColor Green
+Write-Host "[+] Backups: settings.golden.xml.before_maxfps_$stamp / settings.xml.before_maxfps_$stamp" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "Trade-offs: empty streets, aggressive pop-in, no shadows/fx." -ForegroundColor Yellow
+pause
