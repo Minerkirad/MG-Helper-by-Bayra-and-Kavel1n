@@ -68,6 +68,8 @@ function Show-Menu {
     if ($global:UpdateMessage) { Write-Host "  ОБНОВЛЕНИЕ:     $($global:UpdateMessage)" -ForegroundColor Yellow }
     Write-Host "=========================================================="
     Write-Host ""
+    Write-Host "  MG Helper v$script:Version - by Bayra & Kavel1n"
+    Write-Host ""
     Write-Host "  [1] Установка          (запустить один раз)"
     Write-Host "  [2] Reset settings     (текущие настройки станут защищёнными)"
     Write-Host "  [3] Import settings    (импорт settings.xml из этой папки)"
@@ -75,9 +77,10 @@ function Show-Menu {
     Write-Host "  [5] Отключить тени     (максимальный FPS)"
     Write-Host "  [6] Очистка кэша       (ВНИМАНИЕ: перекачка десятков ГБ)"
     Write-Host ""
-    Write-Host "  [7] Диагностика + отчёт (если что-то не работает)"
-    Write-Host "  [8] Repair              (исправить типовые проблемы)"
-    Write-Host "  [9] Удалить всё"
+    Write-Host "  [7] Восстановить MG    (вернуть настройки MG из снапшота)"
+    Write-Host "  [8] Диагностика + отчёт (если что-то не работает)"
+    Write-Host "  [9] Repair              (исправить типовые проблемы)"
+    Write-Host "  [10] Удалить всё"
     Write-Host ""
     Write-Host "  [0] Выход"
     Write-Host ""
@@ -101,9 +104,10 @@ while ($true) {
             }
         }
         '6' { Run-Step "Clean cache" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'clean-majestic-cache.ps1') } }
-        '7' { Run-Step "Diagnose" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'diagnose.ps1') } }
-        '8' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
-        '9' {
+        '7' { Run-Step "Restore MG snapshot" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'restore-mg-snapshot.ps1') } }
+        '8' { Run-Step "Diagnose" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'diagnose.ps1') } }
+        '9' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
+        '10' {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'uninstall.ps1')
             Write-Host ""
             Write-Host "Удалено. Эту папку можно удалить."
@@ -112,7 +116,7 @@ while ($true) {
         }
         '0' { exit 0 }
         default {
-            Write-Host "Нет такого пункта. Введи цифру 0-9." -ForegroundColor Yellow
+            Write-Host "Нет такого пункта. Введи цифру 0-10." -ForegroundColor Yellow
             Start-Sleep -Seconds 1
         }
     }
