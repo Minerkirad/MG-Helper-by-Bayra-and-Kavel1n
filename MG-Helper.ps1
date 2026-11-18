@@ -87,9 +87,9 @@ while ($true) {
     Show-Menu
     $choice = Read-Host "Выбери пункт"
     switch ($choice) {
-        '1' { Run-Step "Установка" { & cmd /c "`"$(Join-Path $root '1-install.bat')`"" } }
-        '2' { Run-Step "Reset settings" { & cmd /c "`"$(Join-Path $root '2-reset-settings.bat')`"" } }
-        '3' { Run-Step "Import settings" { & cmd /c "`"$(Join-Path $root '3-import-settings.bat')`"" } }
+        '1' { Run-Step "Установка" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'install-gta-watcher.ps1') } }
+        '2' { Run-Step "Reset settings" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'reset-settings.ps1') } }
+        '3' { Run-Step "Import settings" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'import-settings.ps1') } }
         '4' {
             if (Confirm-It "MAX FPS - экстремальный профиль (пустые улицы, pop-in). Применить?") {
                 Run-Step "MAX FPS" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'max-fps.ps1') }
@@ -100,11 +100,11 @@ while ($true) {
                 Run-Step "Cut shadows" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'cut-shadows.ps1') }
             }
         }
-        '6' { Run-Step "Clean cache" { & cmd /c "`"$(Join-Path $root '4-clean-cache.bat')`"" } }
-        '7' { Run-Step "Diagnose" { & cmd /c "`"$(Join-Path $root '5-diagnose.bat')`"" } }
+        '6' { Run-Step "Clean cache" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'clean-majestic-cache.ps1') } }
+        '7' { Run-Step "Diagnose" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'diagnose.ps1') } }
         '8' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
         '9' {
-            & cmd /c "`"$(Join-Path $root '0-uninstall.bat')`""
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'uninstall.ps1')
             Write-Host ""
             Write-Host "Удалено. Эту папку можно удалить."
             Read-Host "Нажми Enter для выхода"
