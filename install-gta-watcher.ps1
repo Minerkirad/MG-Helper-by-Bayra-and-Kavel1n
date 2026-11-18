@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  MG Helper - installer (v4: installs anywhere)
+#  MG Helper - installer (v5: universal - works on ANY Windows PC)
 #  by Bayra & Kavel1n
 #
 #  Run ONCE. It sets up:
@@ -8,12 +8,15 @@
 #    archives Majestic's vanilla backup so MG graphics survives,
 #    applies golden, archives dlccache
 #  - on game exit: restores settings and Majestic's files
-#  - autostart of the watcher with Windows
+#  - autostart of the watcher with Windows (self-healing)
 #  - watcher has a -Diagnose mode for remote troubleshooting
 #
-#  All package files live in %LOCALAPPDATA%\MG_Helper
-#  (always writable - independent of OneDrive / Documents quirks).
-#  Nothing is ever deleted. Use "0-uninstall.bat" to remove everything.
+#  v5 = UNIVERSAL: no hardcoded paths. settings.xml, MiamiGraphics
+#  and Majestic are DISCOVERED on THIS PC (Documents / OneDrive /
+#  any profile location / registry KFM). The result is cached in
+#  %LOCALAPPDATA%\MG_Helper\config.json - edit that file to
+#  override any path manually. Processes are matched by name AND
+#  command line (covers renamed launchers).
 # ============================================================
 
 $host.UI.RawUI.WindowTitle = 'MG Helper - by Bayra & Kavel1n'
@@ -23,39 +26,20 @@ $ErrorActionPreference = 'Continue'
 Get-ChildItem $PSScriptRoot -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
 
 # ------------------------------------------------------------
-# 0. locate settings.xml (multi-strategy: standard roots, then recursive)
+# 0. universal discovery module (ships with the package)
 # ------------------------------------------------------------
-function Find-SettingsXml {
-    # a) known Documents roots
-    $docsRoots = @(
-        [Environment]::GetFolderPath('MyDocuments'),
-        "$env:USERPROFILE\OneDrive\Documents",
-        "$env:USERPROFILE\Documents"
-    )
-    foreach ($one in (Get-ChildItem "$env:USERPROFILE" -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)) {
-        $docsRoots += (Join-Path $one.FullName 'Documents')
-    }
-    foreach ($d in ($docsRoots | Select-Object -Unique)) {
-        $c = Join-Path $d 'Rockstar Games\GTA V\settings.xml'
-        if ($c -and (Test-Path $c)) { return $c }
-    }
-
-    # b) recursive fallback: search the whole user profile (depth-limited)
-    Write-Host "[i] settings.xml not in standard locations - searching user profile..." -ForegroundColor DarkGray
-    $hits = Get-ChildItem "$env:USERPROFILE" -Recurse -Depth 5 -Filter 'settings.xml' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match 'Rockstar Games\\GTA V' -and $_.FullName -notmatch '_settings_backup' } |
-        Sort-Object LastWriteTime -Descending
-    foreach ($h in $hits) {
-        $c = Get-Content $h.FullName -Raw -ErrorAction SilentlyContinue
-        if ($c -match '<Settings>' -and ($c -notmatch '\$\d')) { return $h.FullName }   # validate content
-    }
-    return $null
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (-not (Test-Path -LiteralPath $commonPath)) {
+    Write-Host "[!] common.ps1 missing next to this installer." -ForegroundColor Red
+    Write-Host "    Re-download the whole package - it is required." -ForegroundColor DarkGray
+    pause; exit 1
 }
+. $commonPath
 
 $Settings = Find-SettingsXml
 if (-not $Settings) {
     Write-Host "[!] Could not find Rockstar Games\GTA V\settings.xml on this PC." -ForegroundColor Red
-    Write-Host "    Run GTA V once (so it creates its settings), then run this installer again."
+    Write-Host "    Run GTA V once (so it creates its settings), then run this installer again." -ForegroundColor DarkGray
     pause; exit 1
 }
 $GtaDir = Split-Path $Settings
@@ -88,57 +72,66 @@ if (-not (Test-Path $golden) -and (Test-Path $legacyGolden)) {
 }
 
 # ------------------------------------------------------------
-# 2. watcher script (v4: settings discovered, helper folder storage)
+# 2. watcher script (v5: universal discovery + config + self-heal)
 # ------------------------------------------------------------
 $watcherCode = @'
 param([switch]$Diagnose)
-# MG Helper watcher v4 - by Bayra & Kavel1n
-# Golden (this PC owner's own settings) is applied at every GTA5 launch and
-# restored on exit. MG files are snapshotted (archive only). Majestic's
-# vanilla backup .bin is archived during the session so MG graphics survives,
-# and returned after. Nothing is ever deleted.
-# All package data lives in %LOCALAPPDATA%\MG_Helper.
-# settings.xml is DISCOVERED (Documents / OneDrive / recursive profile search).
+# MG Helper watcher v5 - universal - by Bayra & Kavel1n
+# Golden settings are applied at every GTA5 launch and restored on exit.
+# MG files are snapshotted (archive only). Majestic's vanilla backup is
+# archived during the session so MG graphics survives, and returned after.
+# Nothing is ever deleted. All package data lives in %LOCALAPPDATA%\MG_Helper.
+# Paths are DISCOVERED (Documents / OneDrive / registry KFM / profile walk)
+# and cached in config.json - edit that file to override manually.
+# Processes are matched by name AND command line (renamed launchers work).
 
 $ErrorActionPreference = 'SilentlyContinue'
-$HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
-$Golden    = Join-Path $HelperDir 'settings.golden.xml'
-$LogFile   = Join-Path $HelperDir 'watcher.log'
+$HelperDir  = Join-Path $env:LOCALAPPDATA 'MG_Helper'
+$Golden     = Join-Path $HelperDir 'settings.golden.xml'
+$LogFile    = Join-Path $HelperDir 'watcher.log'
+$ConfigFile = Join-Path $HelperDir 'config.json'
 
-function Find-SettingsXml {
-    $docsRoots = @(
-        [Environment]::GetFolderPath('MyDocuments'),
-        "$env:USERPROFILE\OneDrive\Documents",
-        "$env:USERPROFILE\Documents"
-    )
-    foreach ($one in (Get-ChildItem "$env:USERPROFILE" -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)) {
-        $docsRoots += (Join-Path $one.FullName 'Documents')
-    }
-    foreach ($d in ($docsRoots | Select-Object -Unique)) {
-        $c = Join-Path $d 'Rockstar Games\GTA V\settings.xml'
-        if ($c -and (Test-Path $c)) { return $c }
-    }
-    $hits = Get-ChildItem "$env:USERPROFILE" -Recurse -Depth 5 -Filter 'settings.xml' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match 'Rockstar Games\\GTA V' -and $_.FullName -notmatch '_settings_backup' } |
-        Sort-Object LastWriteTime -Descending
-    foreach ($h in $hits) {
-        $c = Get-Content $h.FullName -Raw -ErrorAction SilentlyContinue
-        if ($c -match '<Settings>' -and ($c -notmatch '\$\d')) { return $h.FullName }   # validate content
-    }
-    return $null
+# shared discovery module (deployed by 1-install.bat next to this script)
+$common = Join-Path $PSScriptRoot 'common.ps1'
+if (-not (Test-Path -LiteralPath $common)) { $common = Join-Path $HelperDir 'common.ps1' }
+if (Test-Path -LiteralPath $common) {
+    . $common
+} else {
+    # degraded mode - bare fallbacks so the watcher can still log clearly
+    function Get-MgConfig { return $null }
+    function Resolve-MgPaths { return $null }
+    function Find-MatchingProcess { param([string[]]$Patterns) return @() }
+    function Find-SettingsXml { return $null }
+    function Find-MiamiGraphicsDir { return $null }
+    function Find-MajesticJson { return $null }
+    function Get-MajesticCachePath { param($j) return $null }
 }
 
 function Log($msg) {
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $msg" | Out-File $LogFile -Append -Encoding UTF8
 }
 
+function Get-MgDirs {
+    param($Cfg)
+    $dirs = @()
+    if ($Cfg -and $Cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $Cfg.miamiGraphicsDir)) { $dirs += $Cfg.miamiGraphicsDir }
+    foreach ($root in @($env:APPDATA, $env:LOCALAPPDATA)) {
+        if (-not $root) { continue }
+        $c = Join-Path $root 'MiamiGraphics'
+        if ((Test-Path -LiteralPath $c) -and ($dirs -notcontains $c)) { $dirs += $c }
+    }
+    return ,$dirs
+}
+
 function Snapshot-Mg {
     # saves a full copy of MG settings files (nothing is ever deleted)
+    param($MgDirs)
     try {
+        if (-not $MgDirs -or @($MgDirs).Count -eq 0) { Log "[i] MG dirs not found - snapshot skipped"; return }
         $snapDir = Join-Path $HelperDir 'mg_snapshot'
         New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
         $n = 0
-        foreach ($dir in @("$env:APPDATA\MiamiGraphics", "$env:LOCALAPPDATA\MiamiGraphics") | Select-Object -Unique) {
+        foreach ($dir in $MgDirs) {
             if (-not (Test-Path $dir)) { continue }
             $root = ($dir -replace '[:\\/]', '_')
             foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
@@ -153,15 +146,24 @@ function Snapshot-Mg {
     }
 }
 
+function Get-MajesticBackupDir {
+    param($Cfg)
+    if ($Cfg -and $Cfg.majesticJson -and (Test-Path -LiteralPath $Cfg.majesticJson)) {
+        $d = Join-Path (Split-Path $Cfg.majesticJson) 'backup'
+        if (Test-Path -LiteralPath $d) { return $d }
+    }
+    $d = Join-Path $env:APPDATA 'majestic-launcher\Multiplayer\backup'
+    if (Test-Path -LiteralPath $d) { return $d }
+    return $null
+}
+
 function Clean-Dlccache {
     # archives dlccache .dat files into a backup folder instead of deleting
-    $cachePath = $null
-    $mjJson = "$env:APPDATA\majestic-launcher\Multiplayer\majestic.json"
-    if (Test-Path $mjJson) {
-        try { $cachePath = (Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath } catch {}
-    }
-    if (-not $cachePath -or -not (Test-Path "$cachePath\dlccache")) { return }
+    param($Cfg)
     try {
+        $cachePath = Get-MajesticCachePath $Cfg.majesticJson
+        if (-not $cachePath) { $cachePath = Get-MajesticCachePath (Join-Path $env:APPDATA 'majestic-launcher\Multiplayer\majestic.json') }
+        if (-not $cachePath -or -not (Test-Path "$cachePath\dlccache")) { return }
         $files = Get-ChildItem "$cachePath\dlccache" -Filter '*.dat' -ErrorAction SilentlyContinue
         if (-not $files) { return }
         $arc = Join-Path $HelperDir ("dlccache_backup\{0}" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
@@ -176,9 +178,10 @@ function Clean-Dlccache {
 function Archive-VanillaBackup {
     # archives Majestic's vanilla update.rpf backup (.bin) so MG graphics
     # survives the launch. Only ONE archived copy is kept (prune older).
+    param($Cfg)
     try {
-        $bkDir = "$env:APPDATA\majestic-launcher\Multiplayer\backup"
-        if (-not (Test-Path $bkDir)) { return }
+        $bkDir = Get-MajesticBackupDir $Cfg
+        if (-not $bkDir) { return }
         $bins = Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue
         if (-not $bins) { return }
         $arcRoot = Join-Path $HelperDir 'vanilla_backup_archive'
@@ -195,9 +198,10 @@ function Archive-VanillaBackup {
 
 function Restore-VanillaBackup {
     # returns the archived vanilla backup back to Majestic ('before' state)
+    param($Cfg)
     try {
-        $bkDir = "$env:APPDATA\majestic-launcher\Multiplayer\backup"
-        if (-not (Test-Path $bkDir)) { return }
+        $bkDir = Get-MajesticBackupDir $Cfg
+        if (-not $bkDir) { return }
         $latestArc = Get-ChildItem (Join-Path $HelperDir 'vanilla_backup_archive') -Directory -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending | Select-Object -First 1
         if (-not $latestArc) { return }
@@ -213,122 +217,164 @@ function Restore-VanillaBackup {
 # ---------------- diagnose mode ----------------
 if ($Diagnose) {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    $cfg = Get-MgConfig
+
     "=== ОБЩЕЕ ==="
     "Папка пакета:    $HelperDir"
     "Эталон:          $Golden (есть: $(Test-Path $Golden))"
-    $sx = Find-SettingsXml
+    "Конфиг:          $ConfigFile (есть: $(Test-Path $ConfigFile))"
+    $sx = $cfg.settingsXml
+    if (-not $sx -or -not (Test-Path -LiteralPath $sx)) { $sx = Find-SettingsXml }
     "Настройки игры:  $sx"
-    if ($Golden) {
-        $g = Get-Content $Golden -Raw
+    if (-not $sx) { "  (не найдены! Настрой игру один раз или впиши путь в config.json)" }
+    $g = Get-Content $Golden -Raw -ErrorAction SilentlyContinue
+    if ($g) {
         "Эталон валиден:  $($g -match '<Settings>')   повреждён: $($g -match '\$\d')"
         "TextureQuality:  $(([regex]::Match($g, '<TextureQuality value=`"([^`"]+)`"')).Groups[1].Value)"
+    } else {
+        "Эталон:          нет или пуст (появится при первом запуске игры)"
     }
     if ($sx) {
         "Только чтение:   $((Get-Item $sx -ErrorAction SilentlyContinue).IsReadOnly)"
         "Блокировка Win:  $(Test-Path -LiteralPath "$sx`:Zone.Identifier" -ErrorAction SilentlyContinue)"
     }
 
+    "=== ПРОЦЕССЫ (детект по имени + командной строке) ==="
+    $gProc = @(Find-MatchingProcess -Patterns $cfg.gameProcesses)
+    "GTA5:            $([bool]$gProc)  $(@($gProc | ForEach-Object { $_.Name }) -join ', ')"
+    $lProc = @(Find-MatchingProcess -Patterns $cfg.launcherProcesses)
+    "Majestic:        $([bool]$lProc)  $(@($lProc | ForEach-Object { $_.Name }) -join ', ')"
+    $mProc = @(Find-MatchingProcess -Patterns $cfg.mgProcesses)
+    "MG:              $([bool]$mProc)  $(@($mProc | ForEach-Object { $_.Name }) -join ', ')"
+
     "=== MIAMI GRAPHICS ==="
-    $mgDirs = @("$env:APPDATA\MiamiGraphics", "$env:LOCALAPPDATA\MiamiGraphics") | Where-Object { Test-Path $_ }
-    "Установлен:      $([bool]$mgDirs) ($(if ($mgDirs) { $mgDirs -join '; ' } else { 'папки не найдены' }))"
-    foreach ($d in $mgDirs) {
-        $ver = Join-Path $d 'config\installed_version.txt'
+    $mgDir = $cfg.miamiGraphicsDir
+    if (-not $mgDir -or -not (Test-Path -LiteralPath $mgDir)) { $mgDir = Find-MiamiGraphicsDir }
+    "Установлен:      $([bool]$mgDir) ($(if ($mgDir) { $mgDir } else { 'папки не найдены' }))"
+    if ($mgDir) {
+        $ver = Join-Path $mgDir 'config\installed_version.txt'
         if (Test-Path $ver) { "Версия MG:       $((Get-Content $ver -Raw).Trim())" }
-    }
-    foreach ($d in $mgDirs) {
-        foreach ($f in @('optimization_baseline.json','config\optimization_baseline.json','gta_settings_preset.json','config\optimization_mods.json')) {
-            $p = Join-Path $d $f
+        foreach ($f in @('config\optimization_baseline.json','config\gta_settings_preset.json','config\optimization_mods.json')) {
+            $p = Join-Path $mgDir $f
             if (Test-Path $p) { "Файл MG:         $p ($((Get-Item $p).Length) байт)" }
         }
+        $optFile = Join-Path $mgDir 'config\optimization_mods.json'
+        if (Test-Path $optFile) {
+            $optRaw = (Get-Content $optFile -Raw -ErrorAction SilentlyContinue) -replace '\s',''
+            if (-not $optRaw) { $optRaw = '(пусто)' }
+            "Оптимизация MG:  $optRaw"
+            if ($optRaw.Length -le 40) {
+                "  (похоже, оптимизация выключена или не настроена:"
+                "   MG -> 'Настройки графики GTA' -> включить оптимизацию и применить;"
+                "   потом обязательно 2-reset-settings.bat, иначе watcher вернёт старый эталон)"
+            }
+        }
     }
-    "MG запущен:      $([bool](Get-Process | Where-Object { $_.Name -match 'Miami' }))"
     $snap = Join-Path $HelperDir 'mg_snapshot'
     if (Test-Path $snap) { "Снапшот MG:      $((Get-ChildItem $snap -File).Count) файлов (в $snap)" }
     else { "Снапшот MG:      ещё нет (появится при первом запуске GTA5)" }
 
     "=== MAJESTIC ==="
-    $mjJson = "$env:APPDATA\majestic-launcher\Multiplayer\majestic.json"
-    "Конфиг Majestic: $(if (Test-Path $mjJson) { $mjJson } else { 'не найден' })"
-    if (Test-Path $mjJson) {
-        try { "Кэш Majestic:    $((Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath)" } catch {}
+    $mjJson = $cfg.majesticJson
+    if (-not $mjJson -or -not (Test-Path -LiteralPath $mjJson)) { $mjJson = Find-MajesticJson }
+    "Конфиг Majestic: $(if ($mjJson) { $mjJson } else { 'не найден' })"
+    if ($mjJson) {
+        "Кэш Majestic:    $(Get-MajesticCachePath $mjJson)"
+        $bkDir = Join-Path (Split-Path $mjJson) 'backup'
+        if (Test-Path $bkDir) {
+            $binCount = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
+            "Бэкап .bin в папке лаунчера: $binCount шт. (0 = архивированы, >0 = ждать запуска лаунчера)"
+        }
     }
-    $launcherProc = Get-Process -Name 'Majestic Launcher' -ErrorAction SilentlyContinue
-    "Лаунчер запущен: $([bool]$launcherProc)"
-    if (-not $launcherProc) {
-        "  (это нормально, если Majestic сейчас закрыт;"
-        "   тревога только если лаунчер ОТКРЫТ, а строка говорит False -"
-        "   значит Majestic переименовал процесс и триггер архивации не сработает)"
-    }
-    $bkDir = "$env:APPDATA\majestic-launcher\Multiplayer\backup"
-    if (Test-Path $bkDir) {
-        $binCount = (Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue | Measure-Object).Count
-        "Бэкап .bin в папке лаунчера: $binCount шт. (0 = архивированы, >0 = ждать запуска лаунчера)"
-    }
+
+    "=== ПОДСКАЗКИ (если графика/оптимизация MG 'не работает') ==="
+    " 1. Мод должен быть УСТАНОВЛЕН через лаунчер MG (каталог Redux),"
+    "    а не просто скачан - иначе файлы игры не изменены."
+    " 2. Оптимизация включается в MG отдельно ('Настройки графики GTA'),"
+    "    отключена = файл optimization_mods.json размером ~17 байт."
+    " 3. Если оптимизацию применили, но она 'слетает' к запуску игры:"
+    "    watcher возвращает эталон settings.xml при каждом запуске GTA5."
+    "    После ЛЮБОЙ смены графики (в игре или в MG) запусти 2-reset-settings.bat,"
+    "    чтобы эталон обновился и не перезаписывал MG-настройки."
+    " 4. Если что-то не нашлось автоматически: открой файл $ConfigFile"
+    "    и впиши нужные пути вручную (settingsXml / miamiGraphicsDir / majesticJson)."
 
     "=== ПОСЛЕДНИЕ СОБЫТИЯ ==="
     Get-Content $LogFile -Tail 8 -ErrorAction SilentlyContinue
     exit 0
 }
 
-# ---------------- watcher loop ----------------
-if (-not (Test-Path $Golden)) {
-    $sx = Find-SettingsXml
-    if ($sx) {
-        Copy-Item $sx $Golden -Force
-        Log "Created golden backup from $sx"
-    } else {
-        Log "[!] settings.xml not found"
-        exit 1
-    }
+# ---------------- watcher runtime ----------------
+$cfg = Resolve-MgPaths
+if ($cfg -and $cfg.settingsXml) {
+    Log "Watcher v5 started (settings: $($cfg.settingsXml))"
+} else {
+    Log "[!] settings.xml not found - edit $ConfigFile to set it manually"
+    exit 1
 }
 
-$SettingsXml = Find-SettingsXml
-if (-not $SettingsXml) { Log "[!] settings.xml not found at runtime"; exit 1 }
+if (-not (Test-Path $Golden)) {
+    Copy-Item $cfg.settingsXml $Golden -Force
+    Log "Created golden backup from $($cfg.settingsXml)"
+}
 
-Log "Watcher v4 started"
+# self-heal autostart (re-adds the entry if something removed it)
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$expected = "`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`" -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSScriptRoot\gta-settings-watcher.ps1`""
+$current = (Get-ItemProperty $runKey -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue).GTASettingsWatcher
+if ($current -ne $expected) {
+    New-ItemProperty $runKey -Name 'GTASettingsWatcher' -Value $expected -PropertyType String -Force | Out-Null
+    Log "Autostart entry re-added (self-heal)"
+}
+
 $wasRunning = $false
 $wasLauncher = $false
 
 while ($true) {
     Start-Sleep -Seconds 5
     try {
-        # re-discover settings.xml if it vanished (Documents/OneDrive relocation)
-        if (-not (Test-Path $SettingsXml)) { $SettingsXml = Find-SettingsXml }
-        $running = [bool](Get-Process -Name "GTA5" -ErrorAction SilentlyContinue)
-        $launcher = [bool](Get-Process -Name "Majestic Launcher" -ErrorAction SilentlyContinue)
+        # re-discover if paths vanished (Documents/OneDrive relocation)
+        if (-not $cfg.settingsXml -or -not (Test-Path -LiteralPath $cfg.settingsXml)) {
+            $fresh = Resolve-MgPaths -NoSave
+            if ($fresh -and $fresh.settingsXml) { $cfg = $fresh }
+        }
+        if (-not $cfg.settingsXml) { continue }
+
+        $running  = [bool](Find-MatchingProcess -Patterns $cfg.gameProcesses)
+        $launcher = [bool](Find-MatchingProcess -Patterns $cfg.launcherProcesses)
 
         if ($launcher -and -not $wasLauncher) {
             Log "Majestic launcher started"
-            Archive-VanillaBackup
+            Archive-VanillaBackup -Cfg $cfg
         }
         $wasLauncher = $launcher
 
         if ($running -and -not $wasRunning) {
-            Snapshot-Mg
+            Snapshot-Mg -MgDirs (Get-MgDirs $cfg)
             # clear read-only attribute if the user (or a tool) protected settings.xml
-            if ((Get-Item $SettingsXml -ErrorAction SilentlyContinue).IsReadOnly) {
-                Set-ItemProperty $SettingsXml -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+            if ((Get-Item $cfg.settingsXml -ErrorAction SilentlyContinue).IsReadOnly) {
+                Set-ItemProperty $cfg.settingsXml -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                 Log "settings.xml was read-only - attribute cleared"
             }
-            Copy-Item $SettingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force
-            Archive-VanillaBackup   # fallback in case launcher was already running before the watcher
+            Copy-Item $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force
+            Archive-VanillaBackup -Cfg $cfg   # fallback in case launcher was already running before the watcher
             $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-            [IO.File]::WriteAllBytes($SettingsXml, $goldenBytes)
+            [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
             Log "GTA5 launched -> settings applied"
-            Clean-Dlccache
+            Clean-Dlccache -Cfg $cfg
             Start-Sleep -Seconds 3
-            if ((Get-Process -Name "GTA5" -ErrorAction SilentlyContinue) -and -not ((Get-Content $SettingsXml -Raw) -ceq (Get-Content $Golden -Raw))) {
+            if ((Get-Process -Name $cfg.gameProcesses -ErrorAction SilentlyContinue) -and -not ((Get-Content $cfg.settingsXml -Raw) -ceq (Get-Content $Golden -Raw))) {
                 $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-                [IO.File]::WriteAllBytes($SettingsXml, $goldenBytes)
+                [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
                 Log "settings re-applied (was overwritten after launch)"
             }
         }
         elseif (-not $running -and $wasRunning) {
             Start-Sleep -Seconds 3
             $goldenBytes = [IO.File]::ReadAllBytes($Golden)
-            [IO.File]::WriteAllBytes($SettingsXml, $goldenBytes)
+            [IO.File]::WriteAllBytes($cfg.settingsXml, $goldenBytes)
             Log "GTA5 closed -> settings restored"
-            Restore-VanillaBackup
+            Restore-VanillaBackup -Cfg $cfg
         }
         $wasRunning = $running
     } catch {
@@ -341,18 +387,31 @@ while ($true) {
 # 3. cache cleaner (manual, only truly destructive op, y/n prompt)
 # ------------------------------------------------------------
 $cleanCode = @'
-# Cleans the whole Majestic asset cache (on demand).
+# Cleans the whole Majestic asset cache (on demand). Universal discovery.
 # by Bayra & Kavel1n
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'MG Helper - Clean Cache'
 
 $cachePath = $null
-$mjJson = "$env:APPDATA\majestic-launcher\Multiplayer\majestic.json"
+$cfgPath = Join-Path $env:LOCALAPPDATA 'MG_Helper\config.json'
+$mjJson  = Join-Path $env:APPDATA 'majestic-launcher\Multiplayer\majestic.json'
+if (Test-Path $cfgPath) {
+    try {
+        $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        if ($cfg.majesticJson -and (Test-Path -LiteralPath $cfg.majesticJson)) { $mjJson = $cfg.majesticJson }
+    } catch {}
+}
 if (Test-Path $mjJson) {
-    try { $cachePath = (Get-Content $mjJson -Raw | ConvertFrom-Json).cachePath } catch {}
+    try {
+        $j = Get-Content $mjJson -Raw | ConvertFrom-Json
+        foreach ($k in @('cachePath','cache','CachePath','cache_path')) {
+            if ($j.$k) { $cachePath = ($j.$k -replace '"',''); break }
+        }
+    } catch {}
 }
 if (-not $cachePath -or -not (Test-Path $cachePath)) {
     Write-Host "[!] Majestic cache folder not found." -ForegroundColor Red
+    Write-Host "    Check that Majestic was started at least once."
     pause; exit 1
 }
 
@@ -387,7 +446,7 @@ pause
 '@
 
 # ------------------------------------------------------------
-# 4. uninstaller
+# 4. uninstaller (deployed as uninstall-watcher.ps1)
 # ------------------------------------------------------------
 $uninstallCode = @'
 # Removes autostart entry and stops the watcher. Keeps your backups.
@@ -402,23 +461,47 @@ Write-Host "    Backups kept in %LOCALAPPDATA%\MG_Helper"
 pause
 '@
 
-# write scripts as UTF-8 with BOM (required for PS 5.1)
+# ------------------------------------------------------------
+# 5. deploy: common module + scripts, UTF-8 with BOM (PS 5.1)
+#    Single source of truth: files next to this installer are
+#    copied verbatim; only the watcher body is embedded above.
+# ------------------------------------------------------------
 $utf8bom = [Text.UTF8Encoding]::new($true)
+foreach ($pair in @(
+        @{ Src = 'common.ps1';                Dst = 'common.ps1' }
+        @{ Src = 'clean-majestic-cache.ps1'; Dst = 'clean-majestic-cache.ps1' }
+        @{ Src = 'uninstall.ps1';            Dst = 'uninstall-watcher.ps1' }
+    )) {
+    $srcFile = Join-Path $PSScriptRoot $pair.Src
+    if (-not (Test-Path -LiteralPath $srcFile)) {
+        Write-Host "[!] $($pair.Src) missing next to installer - re-download the package." -ForegroundColor Red
+        pause; exit 1
+    }
+    Copy-Item $srcFile (Join-Path $HelperDir $pair.Dst) -Force
+}
 [IO.File]::WriteAllText((Join-Path $HelperDir 'gta-settings-watcher.ps1'), $watcherCode, $utf8bom)
-[IO.File]::WriteAllText((Join-Path $HelperDir 'clean-majestic-cache.ps1'), $cleanCode, $utf8bom)
-[IO.File]::WriteAllText((Join-Path $HelperDir 'uninstall-watcher.ps1'), $uninstallCode, $utf8bom)
 # clean up legacy deployed scripts from pre-v4 installs
 foreach ($old in @('apply-mg-preset.ps1','gta-settings-watcher.ps1','clean-majestic-cache.ps1','uninstall-watcher.ps1')) {
     Remove-Item (Join-Path $legacyBackup $old) -Force -ErrorAction SilentlyContinue
 }
 
 # ------------------------------------------------------------
-# 5. golden backup (migrated above, or fresh from THIS PC's settings)
+# 6. golden backup (migrated above, or fresh from THIS PC's settings)
 # ------------------------------------------------------------
 if (-not (Test-Path $golden)) { Copy-Item $Settings $golden -Force }
 
+# config.json: pin what the installer found (discovery writes the rest)
+$cfg = Get-MgConfig
+$cfg.settingsXml = $Settings
+$mgFound = Find-MiamiGraphicsDir
+if ($mgFound) { $cfg.miamiGraphicsDir = $mgFound }
+$mjFound = Find-MajesticJson
+if ($mjFound) { $cfg.majesticJson = $mjFound }
+Save-MgConfig $cfg
+Write-Host "[i] config.json written (discovered paths are cached there)." -ForegroundColor DarkGray
+
 # ------------------------------------------------------------
-# 6. autostart + run
+# 7. autostart + run
 # ------------------------------------------------------------
 $watcherDst = Join-Path $HelperDir 'gta-settings-watcher.ps1'
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
@@ -432,7 +515,7 @@ Write-Host "[+] Added to Windows autostart." -ForegroundColor Green
 Start-Process powershell -ArgumentList '-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$watcherDst`"" -WindowStyle Hidden
 Start-Sleep 4
 if (Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' }) {
-    Write-Host "[+] Watcher v4 is running." -ForegroundColor Green
+    Write-Host "[+] Watcher v5 is running." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } else {
