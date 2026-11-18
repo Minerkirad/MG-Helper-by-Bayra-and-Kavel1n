@@ -307,10 +307,10 @@ if ($Diagnose) {
     if ($sx -and ((Get-Item $sx -ErrorAction SilentlyContinue).IsReadOnly)) {
         $concl += "[ПРОБЛЕМА] settings.xml только для чтения - watcher сам снимет атрибут при запуске игры."
     }
-    if (-not $mgDirs) {
+    if (-not $mgDir) {
         $concl += "[ИНФО] Miami Graphics не найден - графика MG не установлена (пакет защищает только базовые настройки)."
     }
-    $optFile2 = if ($mgDirs) { Join-Path $mgDirs[0] 'config\optimization_mods.json' } else { $null }
+    $optFile2 = if ($mgDir) { Join-Path $mgDir 'config\optimization_mods.json' } else { $null }
     if ($optFile2 -and (Test-Path $optFile2)) {
         $optRaw2 = ((Get-Content $optFile2 -Raw -ErrorAction SilentlyContinue) -replace '\s','')
         if ($optRaw2.Length -le 40) { $concl += "[ВНИМАНИЕ] оптимизация MG выключена или не настроена (optimization_mods.json почти пуст)." }
