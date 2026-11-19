@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.0'
+$script:Version = '1.6.1'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -44,6 +44,7 @@ function Get-MgConfig {
         autoArchiveBins   = $false
         autoCleanDlccache = $false
         onExit            = 'adopt'
+        sessionGuard      = $true
         notifications     = $true
         docsRoot          = (Get-DocsPin)
     }
@@ -382,21 +383,22 @@ function Write-Atomic {
     $tmp = "$Path.mgtmp"
     for ($try = 1; $try -le 3; $try++) {
         try {
+            [IO.File]::WriteAllBytes($tmp, $Bytes)          # ВСЕГДА пишем tmp первым
             if (Test-Path -LiteralPath $Path) {
-                if ((Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue).IsReadOnly) {
+                $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+                if ($item -and $item.IsReadOnly) {
                     Set-ItemProperty -LiteralPath $Path -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                 }
                 [IO.File]::Replace($tmp, $Path, $null)
             } else {
-                [IO.File]::WriteAllBytes($tmp, $Bytes)
                 Move-Item -LiteralPath $tmp $Path -Force
             }
             return $true
         } catch {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 1
         }
     }
-    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     return $false
 }
 
@@ -427,14 +429,14 @@ function Get-ValidGolden {
 }
 
 function Apply-Golden {
-    # self-heal golden if corrupt, then atomically apply to settings.xml
     param($Cfg)
     $src = Get-ValidGolden -CfgSettingsXml $Cfg.settingsXml
     if (-not $src) { return $false }
+    $goldenPath = Join-Path $script:HelperDir 'settings.golden.xml'
     if ($src.healed) {
-        Copy-Item -LiteralPath $src.path (Join-Path $script:HelperDir 'settings.golden.xml') -Force
+        Copy-Item -LiteralPath $src.path $goldenPath -Force -ErrorAction SilentlyContinue
     }
-    $goldenBytes = [IO.File]::ReadAllBytes((Join-Path $script:HelperDir 'settings.golden.xml'))
+    try { $goldenBytes = [IO.File]::ReadAllBytes($goldenPath) } catch { return $false }
     return (Write-Atomic -Path $Cfg.settingsXml -Bytes $goldenBytes)
 }
 
@@ -446,17 +448,16 @@ function Ensure-BinsRestored {
     param($Cfg)
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
-        if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return $false }
-        $bins = Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue
-        if (@($bins).Count -gt 0) { return $true }
-        $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
-        $latest = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-        if (-not $latest) { return $false }
+        if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return 'none' }
+        if (@(Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue).Count -gt 0) { return 'present' }
+        $latest = Get-ChildItem (Join-Path $script:HelperDir 'vanilla_backup_archive') -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if (-not $latest) { return 'none' }
         $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
-        if (-not $files) { return $false }
+        if (-not $files) { return 'none' }
         $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
-        return $true
-    } catch { return $false }
+        return 'restored'
+    } catch { return 'none' }
 }
 
 function Restore-VanillaBackup {
