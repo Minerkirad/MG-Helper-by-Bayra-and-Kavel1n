@@ -1,12 +1,35 @@
-﻿# Removes autostart entry, watchdog task and stops the watcher. Keeps your backups.
-# Used as source for 0-uninstall.bat (EncodedCommand).
-# by Bayra & Kavel1n
+﻿# MG Helper uninstall v1.6.1 - by Bayra & Kavel1n
+# Останавливает watcher кооперативно, удаляет задачу автозапуска и legacy Run-ключ,
+# возвращает ванильные .bin лаунчеру. Бэкапы и эталон сохраняет.
+$ErrorActionPreference = 'Continue'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'MG Helper - Uninstall'
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' } |
+
+$common = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $common) { . $common }
+
+# 1. cooperative stop
+try { [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop').Set() | Out-Null } catch {}
+Start-Sleep -Seconds 3
+
+# 2. fallback: precise kill - never touches this uninstall process
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
+    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "GTASettingsWatcher" -ErrorAction SilentlyContinue
-schtasks /Delete /TN "MG_Helper_Watchdog" /F 2>&1 | Out-Null
-Write-Host "[+] Watcher stopped, autostart and watchdog removed." -ForegroundColor Green
-Write-Host "    Backups kept in %LOCALAPPDATA%\MG_Helper"
+
+# 3. autostart: scheduled task + legacy mechanisms
+schtasks /Delete /TN 'MG_Helper_Watcher' /F 2>&1 | Out-Null
+schtasks /Delete /TN 'MG_Helper_Watchdog' /F 2>&1 | Out-Null
+Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue
+
+# 4. restore vanilla bins so Majestic does not hit error 1002
+if (Test-Path -LiteralPath $common) {
+    $cfg = Get-MgConfig
+    if (Ensure-BinsRestored -Cfg $cfg) {
+        Write-Host '[+] Ванильные .bin возвращены лаунчеру.' -ForegroundColor Green
+    }
+}
+
+Write-Host '[+] Watcher остановлен, автозапуск удалён.' -ForegroundColor Green
+Write-Host "    Бэкапы и эталон сохранены в $env:LOCALAPPDATA\MG_Helper"
 pause
