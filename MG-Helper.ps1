@@ -20,9 +20,9 @@ function Check-Updates {
         $chkFile = Join-Path $HelperDir 'update_check.txt'
         if ((Test-Path $chkFile) -and (((Get-Date) - (Get-Item $chkFile).LastWriteTime).TotalHours -lt 24)) { return }
         New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
-        Set-Content -LiteralPath $chkFile -Value (Get-Date -Format 'o') -ErrorAction Stop
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoSlug/releases/latest" -UseBasicParsing -TimeoutSec 10
+        Set-Content -LiteralPath $chkFile -Value (Get-Date -Format 'o') -ErrorAction Stop   # only AFTER success - a network failure must not silence checks for 24h
         $tag = ($rel.tag_name -replace '^v','')
         try {
             if ($tag -and ([version]$tag -gt [version]$script:PkgVersion)) {
