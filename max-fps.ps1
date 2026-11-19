@@ -134,4 +134,3 @@ Write-Host "[+] MAX FPS applied (golden: $($merged[$Golden].count), settings: $(
 Write-Host "[+] Backups: settings.golden.xml.before_maxfps_$stamp / settings.xml.before_maxfps_$stamp" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Trade-offs: empty streets, aggressive pop-in, no shadows/fx." -ForegroundColor Yellow
-pause
