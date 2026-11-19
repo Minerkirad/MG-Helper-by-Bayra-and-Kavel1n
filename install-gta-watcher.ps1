@@ -101,7 +101,9 @@ $mgFound = Find-MiamiGraphicsDir
 if ($mgFound) { $cfg.miamiGraphicsDir = $mgFound }
 $mjFound = Find-MajesticJson
 if ($mjFound) { $cfg.majesticJson = $mjFound }
-Save-MgConfig $cfg
+if (-not (Save-MgConfig $cfg)) {
+    Write-Host '[!] config.json could NOT be saved - discovery will repeat next start.' -ForegroundColor Yellow
+}
 Write-Host "[i] config.json written (discovered paths are cached there)." -ForegroundColor DarkGray
 
 # ------------------------------------------------------------
@@ -174,6 +176,7 @@ if (-not $hostExe) {
     $reg.Principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
 }
 $regOk = $false
+$fallbackMode = $false
 try {
     Register-ScheduledTask @reg | Out-Null
     $regOk = $true
@@ -181,8 +184,23 @@ try {
     $tr = if ($hostExe) { "`"$hostExe`" `"$watcherDst`"" } else { "`"$exe`" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`"" }
     schtasks /Create /F /SC MINUTE /MO 10 /TN 'MG_Helper_Watcher' /TR $tr | Out-Null
     $regOk = ($LASTEXITCODE -eq 0)
+    $fallbackMode = $regOk
 }
-if ($regOk) { Write-Host '[+] Watchdog task registered (logon + 10-min repeat).' -ForegroundColor Green }
+# MG-CR-007: verify the task ACTUALLY exists with a working action; the schtasks
+# fallback loses the logon trigger (10-min repeat only) - say so honestly
+if ($regOk) {
+    $taskCheck = Get-ScheduledTask -TaskName 'MG_Helper_Watcher' -ErrorAction SilentlyContinue
+    if (-not $taskCheck) {
+        Write-Host '[!] Task registered but NOT found in the scheduler - install is incomplete.' -ForegroundColor Red
+        exit 1
+    }
+    if ($fallbackMode) {
+        Write-Host '[+] Watchdog task registered (FALLBACK: 10-min repeat only - logon trigger unavailable).' -ForegroundColor Yellow
+        Write-Host '    The watcher still starts within 10 minutes after logon and stays running.' -ForegroundColor DarkGray
+    } else {
+        Write-Host '[+] Watchdog task registered (logon + 10-min repeat).' -ForegroundColor Green
+    }
+}
 else {
     Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red
     exit 1
