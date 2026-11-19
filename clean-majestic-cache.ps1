@@ -27,13 +27,19 @@ if (-not $cachePath -or -not (Test-Path -LiteralPath $cachePath)) {
 }
 
 # --- target guards: never a drive root, Windows dir or a profile root ---
-$full = [IO.Path]::GetFullPath($cachePath).TrimEnd('\')
+# Resolve-Path (not GetFullPath): real existing location, 8.3-names/symlinks expanded
+$full = try { ((Resolve-Path -LiteralPath $cachePath -ErrorAction Stop).Path).TrimEnd('\') } catch {
+    Write-Host '[!] Не удалось разрешить путь кэша - отменено.' -ForegroundColor Red
+    exit 1
+}
 $badTargets = @(
     "$env:SystemDrive\",
     $env:SystemRoot,
     $env:USERPROFILE,
     $env:APPDATA,
-    $env:LOCALAPPDATA
+    $env:LOCALAPPDATA,
+    (Join-Path $env:USERPROFILE 'Documents'),
+    (Join-Path $env:USERPROFILE 'Документы')
 ) | ForEach-Object { if ($_) { $_.TrimEnd('\') } }
 if (($full -match '^[A-Za-z]:$') -or ($badTargets -contains $full)) {
     Write-Host "[!] Подозрительная цель очистки: $full - отменено." -ForegroundColor Red
@@ -58,7 +64,7 @@ Write-Host '============================================='
 Write-Host ' Majestic cache cleaner - by Bayra & Kavel1n'
 Write-Host '============================================='
 Write-Host ''
-Write-Host "Папка кэша: $cachePath"
+Write-Host "Папка кэша: $full"
 Write-Host ('Размер:     {0:N0} MB' -f $size)
 Write-Host ''
 Write-Host '[!] ВНИМАНИЕ: после очистки Majestic перекачает кэш при следующем запуске.' -ForegroundColor Yellow
@@ -71,12 +77,14 @@ if ($size -gt 10240) {
     if ($answer -notmatch '^(д|да|y|yes)$') { Write-Host 'Отменено.'; exit 0 }
 }
 
-Get-ChildItem $cachePath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+Get-ChildItem -LiteralPath $full -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "Очищаю $($_.Name)..."
-    Remove-Item "$($_.FullName)\*" -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath $_.FullName -ErrorAction SilentlyContinue |
+        ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {} }
 }
-Get-ChildItem $cachePath -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath $full -File -ErrorAction SilentlyContinue |
+    ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue } catch {} }
 
-$left = (Get-ChildItem $cachePath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB
+$left = (Get-ChildItem -LiteralPath $full -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ''
 Write-Host ('[+] Готово. Осталось: {0:N0} MB' -f $left) -ForegroundColor Green
