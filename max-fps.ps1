@@ -119,17 +119,31 @@ foreach ($file in @($Golden, $Settings)) {
     }
     $merged[$file] = @{ text = $s; count = $n }
 }
-# phase 2: atomic writes (retry + read-only handling live in Write-Atomic)
+# phase 2: atomic writes (retry + read-only handling live in Write-Atomic).
+# MG-CR-009: transactional - order is golden THEN live; if the live write
+# fails, the golden is rolled back from its backup (files never diverge).
+$goldenWritten = $false
 foreach ($file in @($Golden, $Settings)) {
     $bytes = [Text.UTF8Encoding]::new($true).GetBytes($merged[$file].text)
+    $wok = $false
     if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
-        if (-not (Write-Atomic -Path $file -Bytes $bytes)) {
-            Write-Host "[!] could not write $file (locked?) - profile NOT fully applied" -ForegroundColor Red
-            exit 1
-        }
+        $wok = Write-Atomic -Path $file -Bytes $bytes
     } else {
-        [IO.File]::WriteAllBytes($file, $bytes)   # byte[] -> WriteAllBytes, NOT WriteAllText (byte[] -> decimal-garbage string)
+        try { [IO.File]::WriteAllBytes($file, $bytes); $wok = $true } catch { $wok = $false }   # byte[] -> WriteAllBytes, NOT WriteAllText
     }
+    if (-not $wok) {
+        Write-Host "[!] could not write $file (locked?)" -ForegroundColor Red
+        if ($goldenWritten) {
+            $rBytes = [IO.File]::ReadAllBytes((Join-Path $HelperDir "settings.golden.xml.before_maxfps_$stamp"))
+            if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) { $null = Write-Atomic -Path $Golden -Bytes $rBytes }
+            else { [IO.File]::WriteAllBytes($Golden, $rBytes) }
+            Write-Host "[!] golden ROLLED BACK from backup - nothing changed." -ForegroundColor Yellow
+        } else {
+            Write-Host "[!] nothing was modified yet - aborting." -ForegroundColor Yellow
+        }
+        exit 1
+    }
+    if ($file -eq $Golden) { $goldenWritten = $true }
 }
 
 Write-Host "[+] MAX FPS applied (golden: $($merged[$Golden].count), settings: $($merged[$Settings].count) values)" -ForegroundColor Green
