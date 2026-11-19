@@ -25,7 +25,7 @@ if (-not $found) {
     Write-Host ""
     Write-Host "Searched:"
     $roots | ForEach-Object { Write-Host "    $_" }
-    pause; exit 1
+    exit 1
 }
 
 Write-Host "[i] Watcher found: $found"
