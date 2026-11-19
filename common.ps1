@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.8'   # держать в синке с version.json
+$script:Version = '1.7.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -302,19 +302,21 @@ function Find-MatchingProcess {
     $hits = @()
     try {
         foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) {
-            if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
+            # explorer too: 'explorer /select,"...\GTA5.exe"' must not look like the game
+            if ($p.Name -match '^(powershell|pwsh|explorer)(\.exe)?$') { continue }
             if ($Patterns | Where-Object { $p.Name -like "*$_*" }) { $hits += $p }
         }
     } catch {}
     if (-not $hits) {
         # cache is PER PATTERN SET: one shared cache made the launcher query return
-        # the game query's result (and vice versa) for up to 60 s
+        # the game query's result (and vice versa) for up to 20 s
         $key = ($Patterns -join '|').ToLower()
         $entry = $script:cimCache[$key]
-        if ($entry -and (((Get-Date) - $entry.at).TotalSeconds -lt 60)) { return @($entry.hits) }
+        if ($entry -and (((Get-Date) - $entry.at).TotalSeconds -lt 20)) { return @($entry.hits) }
         try {
             foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
-                if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
+                # explorer too: 'explorer /select,"...\GTA5.exe"' must not look like the game
+                if ($p.Name -match '^(powershell|pwsh|explorer)(\.exe)?$') { continue }
                 $exeNames = @(Get-ExeNamesFromCommandLine $p.CommandLine)
                 if ($p.ExecutablePath) {
                     try { $exeNames += [IO.Path]::GetFileNameWithoutExtension($p.ExecutablePath) } catch {}
@@ -642,6 +644,67 @@ function Prune-BackupFiles {
             Select-Object -Skip $Keep |
             Remove-Item -Force -ErrorAction SilentlyContinue
     } catch {}
+}
+
+function Snapshot-MgFiles {
+    # saves a full copy of MG json settings (nothing is ever deleted).
+    # Extracted here so tools\check.ps1 can round-trip test it in isolation.
+    # $Logger receives progress lines (the watcher passes its Log function);
+    # -NoStandardScan skips the APPDATA/LOCALAPPDATA probe (tests use a fake dir).
+    param($Cfg, [scriptblock]$Logger = $null, [switch]$NoStandardScan)
+    function MLog($m) { if ($Logger) { & $Logger $m } }
+    try {
+        $dirs = @()
+        if ($Cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $Cfg.miamiGraphicsDir)) { $dirs += $Cfg.miamiGraphicsDir }
+        if (-not $NoStandardScan) {
+            foreach ($root in @($env:APPDATA, $env:LOCALAPPDATA)) {
+                $c = Join-Path $root 'MiamiGraphics'
+                if ((Test-Path -LiteralPath $c) -and ($dirs -notcontains $c)) { $dirs += $c }
+            }
+        }
+        if (@($dirs).Count -eq 0) { MLog "[i] MG dirs not found - snapshot skipped"; return }
+        $snapDir = Join-Path $script:HelperDir 'mg_snapshot'
+        New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
+        # manifest maps snapshot file -> original relative path. The legacy '__'
+        # flattening is ambiguous if a folder/file name itself contains '__';
+        # restore prefers the manifest and falls back to the legacy decode.
+        $manifest = [ordered]@{}
+        $rootPrefixes = @{}
+        $n = 0
+        foreach ($dir in $dirs) {
+            $rootFlat = ($dir -replace '[:\\/]', '_')
+            foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
+                $name = "$rootFlat`__f$n.json"
+                $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
+                $rootPrefixes[$rootFlat] = $true
+                Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $name) -Force
+                $n++
+            }
+        }
+        if ($n -gt 0) {
+            # atomic manifest write: a torn manifest.json must never exist
+            $mf = Join-Path $snapDir 'manifest.json'
+            $tmp = "$mf.tmp"
+            [IO.File]::WriteAllText($tmp, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $mf) { [IO.File]::Replace($tmp, $mf, [NullString]::Value) }
+            else { Move-Item -LiteralPath $tmp -Destination $mf -Force }
+            # ONLY AFTER the manifest is durable: drop stale files of each snapshotted
+            # root that are not in the fresh manifest (legacy '__' names from old
+            # versions, jsons deleted from MG). Otherwise they resurrect on restore.
+            foreach ($flat in $rootPrefixes.Keys) {
+                Get-ChildItem $snapDir -File -Filter "$flat`__*" -ErrorAction SilentlyContinue |
+                    Where-Object { -not $manifest.Contains($_.Name) } |
+                    ForEach-Object {
+                        # -LiteralPath + try/catch: piped -Path resolves wildcards and
+                        # throws terminating errors under EAP=Stop (same as Copy-Item)
+                        try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue } catch {}
+                    }
+            }
+            MLog "MG snapshot saved ($n files -> $snapDir)"
+        }
+    } catch {
+        MLog "[!] MG snapshot error: $_"
+    }
 }
 
 # ------------------------------------------------------------
