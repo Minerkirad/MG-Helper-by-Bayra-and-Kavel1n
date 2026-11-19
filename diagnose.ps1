@@ -51,7 +51,7 @@ $extra += "OS:     $([Environment]::OSVersion.VersionString)"
 $extra += "PS:     $($PSVersionTable.PSVersion)"
 $extra += $diskLines
 $extra += ""
-$extra += "=== CONFIG.JSON ==="
+$extra += "=== CONFIG.JSON (ключи и версии; пути маскируются) ==="
 $extra += (Get-Content (Join-Path $watcherDir 'config.json') -Raw -ErrorAction SilentlyContinue)
 $extra += ""
 $extra += "=== WATCHER.LOG (последние 40 строк) ==="
@@ -64,10 +64,29 @@ $extra += "=== VANILLA BACKUP ARCHIVE ==="
 $extra += (Get-ChildItem (Join-Path $watcherDir 'vanilla_backup_archive') -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) ($([int]($_.Length / 1MB)) МБ)" })
 $extra | Add-Content (Join-Path $watcherDir "report_$stamp.txt") -Encoding UTF8
 
+# MG-CR-011: the report goes to strangers - mask the user's identity by default.
+# Full paths are opt-in with explicit confirmation. Applied to the WHOLE file
+# (including the watcher -Diagnose header) by post-processing.
+$mask = $true
+Write-Host ""
+$fullAnswer = Read-Host "Включить в отчёт ПОЛНЫЕ пути (содержат имя пользователя)? (да/нет)"
+if ($fullAnswer -match '^(д|да|y|yes)$') { $mask = $false }
+$reportPath = Join-Path $watcherDir "report_$stamp.txt"
+if ($mask) {
+    $rp = (Resolve-Path -LiteralPath $reportPath -ErrorAction SilentlyContinue).Path
+    if ($rp) {
+        $content = Get-Content -LiteralPath $rp -Raw -ErrorAction SilentlyContinue
+        $content = $content -replace [regex]::Escape($env:USERPROFILE), 'C:\Users\<USER>'
+        $content = $content -replace [regex]::Escape($env:USERDOMAIN + '\' + $env:USERNAME), '<USER>'
+        $content = $content -replace [regex]::Escape($env:USERNAME), '<USER>'
+        [IO.File]::WriteAllText($rp, $content, [Text.UTF8Encoding]::new($true))
+    }
+}
+
 Write-Host "=================================================="
 Write-Host "[+] Report saved: report_$stamp.txt (in the watcher folder)" -ForegroundColor Green
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
-Write-Host "[i] Отчёт содержит config.json: имя пользователя и пути на диске." -ForegroundColor DarkGray
-Write-Host "    Не хочешь это показывать - удали секцию CONFIG.JSON из отчёта." -ForegroundColor DarkGray
+if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray }
+else { Write-Host "[i] ВНИМАНИЕ: отчёт содержит ПОЛНЫЕ пути с именем пользователя." -ForegroundColor Yellow }
 # open Explorer with the report file selected
 Start-Process explorer.exe "/select,`"$watcherDir\report_$stamp.txt`""
