@@ -40,7 +40,8 @@ function Clean-Dlccache {
         if (-not $files) { return }
         $arc = Join-Path $HelperDir ("dlccache_backup\{0}" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
         New-Item -ItemType Directory -Force -Path $arc | Out-Null
-        $files | Move-Item -Destination $arc -Force -ErrorAction SilentlyContinue
+        # per-file LiteralPath: names with [ ] would break piped -Path resolution
+        $files | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination $arc -Force -ErrorAction SilentlyContinue }
         Log ("dlccache archived {0} files -> {1}" -f $files.Count, $arc)
     } catch {
         Log "[!] dlccache archive error: $_"
@@ -223,10 +224,12 @@ Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard wind
 
 $wasRunning = $false
 if ($state.phase -eq 'InGame') {
-    # previous watcher instance died mid-session: adopt without re-snapshot
+    # previous watcher instance died mid-session: adopt without re-snapshot.
+    # PID reuse guard: the pid must still belong to a game-like process
     $gp = Get-Process -Id $state.gamePid -ErrorAction SilentlyContinue
-    if ($gp) { $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))" }
-    else { $state.phase = 'Idle' }
+    if ($gp -and ($gp.Name -like 'GTA5*' -or $gp.Name -like '*gtav*')) {
+        $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))"
+    } else { $state.phase = 'Idle' }
 }
 $lastBeat = Get-Date
 $script:wasLauncher = $false
@@ -259,8 +262,18 @@ while ($true) {
         }
         if (-not $cfg.settingsXml) { continue }
 
-        $running  = [bool](Find-MatchingProcess -Patterns $cfg.gameProcesses)
+        $procs    = @(Find-MatchingProcess -Patterns $cfg.gameProcesses)
+        $running  = [bool]$procs
         $launcher = [bool](Find-MatchingProcess -Patterns $cfg.launcherProcesses)
+
+        # fast relaunch (crash + restart within one poll): a NEW pid means a NEW
+        # session - without this, the old sessionStart/appliedThisSession survive
+        # and the launcher's overwrite could be adopted as the user's choice
+        $newPid = ($procs | Select-Object -First 1).Id
+        if ($running -and $wasRunning -and ($state.phase -eq 'InGame') -and ($newPid -ne $state.gamePid)) {
+            Log "[i] new game PID $newPid != $($state.gamePid) - treating as a new session"
+            $wasRunning = $false   # the launch branch below re-initialises everything
+        }
 
         # 1002 insurance: bins must be vanilla BEFORE the launcher patches the game
         if ($launcher -and -not $script:wasLauncher) {
@@ -291,7 +304,7 @@ while ($true) {
             }
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             $state.phase = 'InGame'
-            $state.gamePid = (@(Find-MatchingProcess -Patterns $cfg.gameProcesses) | Select-Object -First 1).Id
+            $state.gamePid = $newPid
             $state.sessionStart = $sessionStart.ToString('o')
             $state.guardRollbacks = 0
             $state.applied = $appliedThisSession
@@ -318,9 +331,14 @@ while ($true) {
                 # adopt: the user's in-game changes become the new golden
                 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
                 Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
-                Copy-Item -LiteralPath $cfg.settingsXml $Golden -Force -ErrorAction SilentlyContinue
-                Log "exit: settings changed in game - adopted as new golden"
-                $adopted = $true
+                # atomic: a crash mid-copy must not leave a torn golden
+                $adoptBytes = [IO.File]::ReadAllBytes($cfg.settingsXml)
+                if (-not (Write-Atomic -Path $Golden -Bytes $adoptBytes)) {
+                    Log "[!] could not write golden (locked?) - golden kept"
+                } else {
+                    Log "exit: settings changed in game - adopted as new golden"
+                    $adopted = $true
+                }
             }
             elseif ($null -eq $same) { Log "[i] exit: settings.xml unreadable - golden kept, adopt skipped" }
             elseif ($same) { Log "GTA5 closed -> settings unchanged, golden kept" }
