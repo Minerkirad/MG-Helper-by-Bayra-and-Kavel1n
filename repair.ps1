@@ -37,7 +37,9 @@ foreach ($c in $chain) {
 if ($gSrc -and ($gSrc -ne $Golden)) {
     New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
     Copy-Item $gSrc $Golden -Force
-    $results += @{ ok = $true;  msg = "Эталон восстановлен из $((Split-Path $gSrc -Leaf))" }
+    $msg = "Эталон восстановлен из $((Split-Path $gSrc -Leaf))"
+    if ($gSrc -eq $cfg0.settingsXml) { $msg += " (LIVE settings - проверьте, что это нужный файл!)" }
+    $results += @{ ok = $true;  msg = $msg }
 }
 elseif ($gSrc) { $results += @{ ok = $true;  msg = "Эталон валиден - восстановление не потребовалось" } }
 else {              $results += @{ ok = $false; msg = "Ни одного валидного источника эталона не найдено" } }
