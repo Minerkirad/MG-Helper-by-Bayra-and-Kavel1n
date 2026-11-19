@@ -45,6 +45,7 @@ function Get-MgConfig {
         autoCleanDlccache = $false
         onExit            = 'adopt'
         notifications     = $true
+        docsRoot          = (Get-DocsPin)
     }
     if (Test-Path -LiteralPath $script:ConfigFile) {
         try {
@@ -174,7 +175,9 @@ function Find-SettingsXml {
     foreach ($d in (Get-DocsRoots)) {
         foreach ($tail in $tails) {
             $c = Join-Path $d $tail
-            if ((Test-Path -LiteralPath $c -PathType Leaf) -and (Test-ValidSettingsXml $c)) { return $c }
+            # standard docs root: trusted by construction (existence-only check -
+            # the game may hold settings.xml with exclusive access while running)
+            if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
         }
     }
     if ($NoWalk) { return $null }
@@ -309,6 +312,69 @@ $script:lastCimScan = [datetime]::MinValue
 $script:lastCimHits = @()
 
 # ------------------------------------------------------------
+# one-shot: resolve everything, persist to config, return config.
+# -NoSave skips writing. Cached settingsXml is validated by
+# EXISTENCE only (the running game holds settings.xml exclusively,
+# so content reads can fail during a session).
+# ------------------------------------------------------------
+function Resolve-MgPaths {
+    param([switch]$NoSave, [switch]$ForceFull)
+    $cfg = Get-MgConfig
+    $changed = $false
+
+    # cached path must EXIST (existence-only: game may hold the file open);
+    # re-discover if missing, if the cached value is in Temp/backups, or
+    # if the last full discovery is older than 24 h
+    $cachedOk = $false
+    if ($cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml) -and ($cfg.settingsXml -notmatch '\\Temp\\')) {
+        $cachedOk = $true
+    }
+    $stale = $true
+    try {
+        $last = [datetime]$cfg.lastFullDiscovery
+        $stale = ((Get-Date) - $last).TotalHours -ge 24
+    } catch {}
+    if (-not $cachedOk -or $ForceFull -or ($stale -and -not $NoSave)) {
+        $found = Find-SettingsXml
+        if ($found) {
+            if ($found -ne $cfg.settingsXml) { $changed = $true }
+            $cfg.settingsXml = $found
+        }
+        $cfg.lastFullDiscovery = (Get-Date).ToString('o')
+        $changed = $true
+    }
+
+    # cached MG dir must be content-validated (empty leftovers poison the cache)
+    if (-not $cfg.miamiGraphicsDir -or -not (Test-ValidMgDir $cfg.miamiGraphicsDir)) {
+        $found = Find-MiamiGraphicsDir
+        if ($found) {
+            if ($found -ne $cfg.miamiGraphicsDir) { $changed = $true }
+            $cfg.miamiGraphicsDir = $found
+        }
+        elseif (-not $found -and $cfg.miamiGraphicsDir) { $cfg.miamiGraphicsDir = ''; $changed = $true }
+    }
+    # cached majestic.json must parse and look real
+    if (-not $cfg.majesticJson -or -not (Test-ValidMajesticJson $cfg.majesticJson)) {
+        $found = Find-MajesticJson
+        if ($found) {
+            if ($found -ne $cfg.majesticJson) { $changed = $true }
+            $cfg.majesticJson = $found
+        }
+        elseif (-not $found -and $cfg.majesticJson) { $cfg.majesticJson = ''; $changed = $true }
+    }
+
+    # Documents location pin: if it CHANGED after install, the Rockstar SDK
+    # breaks (error 1002) - warn the user via config.docsRootChanged
+    $docsPin = Get-DocsPin
+    if ($docsPin) {
+        $cfg.docsRoot = $docsPin
+        $changed = $true
+    }
+    if (-not $NoSave -and $changed) { Save-MgConfig $cfg }
+    return $cfg
+}
+
+# ------------------------------------------------------------
 # atomic write (temp + Replace, retry 3x, read-only cleared)
 # ------------------------------------------------------------
 function Write-Atomic {
@@ -406,4 +472,24 @@ function Restore-VanillaBackup {
         $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
         return $true
     } catch { return $false }
+}
+
+# ------------------------------------------------------------
+# Documents location pin: detect if the shell folder was MOVED
+# (breaks the Rockstar Games SDK -> error 1002 "incomplete install")
+# ------------------------------------------------------------
+function Get-DocsPin {
+    # Returns the CURRENT Documents location (User Shell Folders\Personal, expanded)
+    try {
+        $raw = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name Personal -ErrorAction Stop).Personal
+        return [Environment]::ExpandEnvironmentVariables($raw)
+    } catch { return $null }
+}
+
+function Test-DocsRootChanged {
+    # returns $true if the Documents location CHANGED from what config.json recorded
+    param([string]$ConfiguredDocsRoot)
+    $cur = Get-DocsPin
+    if (-not $cur -or -not $ConfiguredDocsRoot) { return $false }
+    return ($cur.TrimEnd('\') -ne $ConfiguredDocsRoot.TrimEnd('\'))
 }
