@@ -21,7 +21,7 @@ foreach ($r in ($roots | Select-Object -Unique)) {
 
 if (-not $found) {
     Write-Host "[!] Watcher not found on this PC." -ForegroundColor Red
-    Write-Host "    Run 1-install.bat first (it installs the watcher)."
+    Write-Host "    Run MG-Helper.bat -> [1] first (it installs the watcher)."
     Write-Host ""
     Write-Host "Searched:"
     $roots | ForEach-Object { Write-Host "    $_" }
