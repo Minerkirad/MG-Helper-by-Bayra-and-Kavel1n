@@ -47,18 +47,33 @@ function Snapshot-MgFiles {
         # flattening is ambiguous if a folder/file name itself contains '__';
         # restore prefers the manifest and falls back to the legacy decode.
         $manifest = [ordered]@{}
+        $rootPrefixes = @{}
         $n = 0
         foreach ($dir in $dirs) {
             $rootFlat = ($dir -replace '[:\\/]', '_')
             foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
                 $name = "$rootFlat`__f$n.json"
                 $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
+                $rootPrefixes[$rootFlat] = $true
                 Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $name) -Force
                 $n++
             }
         }
         if ($n -gt 0) {
-            [IO.File]::WriteAllText((Join-Path $snapDir 'manifest.json'), ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            # atomic manifest write: a torn manifest.json must never exist
+            $mf = Join-Path $snapDir 'manifest.json'
+            $tmp = "$mf.tmp"
+            [IO.File]::WriteAllText($tmp, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $mf) { [IO.File]::Replace($tmp, $mf, [NullString]::Value) }
+            else { Move-Item -LiteralPath $tmp -Destination $mf -Force }
+            # ONLY AFTER the manifest is durable: drop stale files of each snapshotted
+            # root that are not in the fresh manifest (legacy '__' names from old
+            # versions, jsons deleted from MG). Otherwise they resurrect on restore.
+            foreach ($flat in $rootPrefixes.Keys) {
+                Get-ChildItem $snapDir -File -Filter "$flat`__*" -ErrorAction SilentlyContinue |
+                    Where-Object { -not $manifest.Contains($_.Name) } |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+            }
             Log "MG snapshot saved ($n files -> $snapDir)"
         }
     } catch {
