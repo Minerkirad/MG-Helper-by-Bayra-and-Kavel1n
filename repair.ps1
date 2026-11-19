@@ -61,7 +61,10 @@ if (-not (Test-Path -LiteralPath $installer)) {
 
 # --- 4. verify watcher process is alive after installer restart ---
 Start-Sleep 4
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' })
+# precise pattern + exclude ourselves: 'MG_Helper' matched ANY script running
+# from the helper dir (incl. this repair), producing a fake "watcher is alive"
+$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
+    Where-Object { ($_.ProcessId -ne $PID) -and ($_.CommandLine -match 'gta-settings-watcher\.ps1') })
 if ($alive.Count -gt 0) { $results += @{ ok = $true;  msg = "Наблюдатель перезапущен (PID $($alive[0].ProcessId))" } }
 else { $results += @{ ok = $false; msg = "Наблюдатель не запустился - пришли отчёт из Диагностики" } }
 
