@@ -47,7 +47,7 @@ $deploy = @(
     'common.ps1', 'gta-settings-watcher.ps1', 'MG-Helper.ps1', 'MG-Helper.bat',
     'diagnose.ps1', 'uninstall.ps1', 'repair.ps1', 'reset-settings.ps1',
     'import-settings.ps1', 'clean-majestic-cache.ps1', 'max-fps.ps1', 'cut-shadows.ps1',
-    'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'version.json'
+    'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'MG-Helper-Host.cs', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
 foreach ($f in $deploy) {
@@ -120,27 +120,54 @@ Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 
 schtasks /Delete /TN 'MG_Helper_Watchdog' /F 2>&1 | Out-Null
 
 $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-$argLine = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
-$action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
-$tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+
+# compile the hidden host (GUI subsystem, no console window at all).
+# Compiled ON THE MACHINE from readable source - no binaries shipped in the ZIP.
+$hostExe = Join-Path $HelperDir 'MG-Helper-Host.exe'
+$hostSrc = Join-Path $PSScriptRoot 'MG-Helper-Host.cs'
+try {
+    $cs = [IO.File]::ReadAllText($hostSrc)
+    Add-Type -TypeDefinition $cs -OutputAssembly $hostExe -OutputType WindowsApplication -ErrorAction Stop
+    Write-Host "[+] Hidden host compiled (no console window at all)." -ForegroundColor Green
+} catch {
+    Write-Host "[!] Cannot compile hidden host: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "    Falling back to S4U task (runs non-interactive, also no window)." -ForegroundColor Yellow
+    $hostExe = $null
+}
+
+if ($hostExe) {
+    $action = New-ScheduledTaskAction -Execute $hostExe -Argument "`"$watcherDst`"" -WorkingDirectory $HelperDir
+} else {
+    $argLine = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
+    $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
+}
+
+$tLogon  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-$set = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+$set     = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+$reg = @{ TaskName='MG_Helper_Watcher'; Action=$action; Trigger=@($tLogon,$tRepeat); Settings=$set
+          Description='MG Helper watcher (by Bayra & Kavel1n)'; Force=$true; ErrorAction='Stop' }
+if (-not $hostExe) {
+    # plan B: S4U - the task runs non-interactive, so no window is ever shown
+    $reg.Principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+}
 $regOk = $false
 try {
-    Register-ScheduledTask -TaskName 'MG_Helper_Watcher' -Action $action -Trigger @($tLogon, $tRepeat) -Settings $set -Description 'MG Helper watcher (by Bayra & Kavel1n)' -Force -ErrorAction Stop | Out-Null
+    Register-ScheduledTask @reg | Out-Null
     $regOk = $true
 } catch {
-    schtasks /Create /F /SC MINUTE /MO 10 /TN 'MG_Helper_Watcher' /TR ("`"$exe`" $argLine") | Out-Null
-    $regOk = [bool](Get-ScheduledTask -TaskName 'MG_Helper_Watcher' -ErrorAction SilentlyContinue)
+    $tr = if ($hostExe) { "`"$hostExe`" `"$watcherDst`"" } else { "`"$exe`" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`"" }
+    schtasks /Create /F /SC MINUTE /MO 10 /TN 'MG_Helper_Watcher' /TR $tr | Out-Null
+    $regOk = ($LASTEXITCODE -eq 0)
 }
 if ($regOk) { Write-Host '[+] Watchdog task registered (logon + 10-min repeat).' -ForegroundColor Green }
 else { Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red }
 
 # ------------------------------------------------------------
-# 6. start watcher
+# 6. start watcher (via the task - no console flash, no focus steal)
 # ------------------------------------------------------------
-Start-Process $exe -ArgumentList $argLine -WindowStyle Hidden
-Start-Sleep 4
+Start-ScheduledTask -TaskName 'MG_Helper_Watcher'
+Start-Sleep 6
 $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
     Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID })
 if ($alive.Count -gt 0) {
