@@ -64,6 +64,7 @@ $extra | Add-Content (Join-Path $watcherDir "report_$stamp.txt") -Encoding UTF8
 Write-Host "=================================================="
 Write-Host "[+] Report saved: report_$stamp.txt (in the watcher folder)" -ForegroundColor Green
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
+Write-Host "[i] Отчёт содержит config.json: имя пользователя и пути на диске." -ForegroundColor DarkGray
+Write-Host "    Не хочешь это показывать - удали секцию CONFIG.JSON из отчёта." -ForegroundColor DarkGray
 # open Explorer with the report file selected
 Start-Process explorer.exe "/select,`"$watcherDir\report_$stamp.txt`""
-pause
