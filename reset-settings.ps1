@@ -67,4 +67,3 @@ Write-Host "[+] Golden reset to THIS PC's current settings." -ForegroundColor Gr
 Write-Host "    TextureQuality in golden: $tq"
 Write-Host "    Resolution in golden:     $w x $h"
 Write-Host "[+] The watcher will now always apply THESE settings." -ForegroundColor Green
-pause
