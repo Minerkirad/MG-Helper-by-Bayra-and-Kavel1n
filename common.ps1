@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.7'   # держать в синке с version.json
+$script:Version = '1.6.8'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -400,7 +400,7 @@ function Resolve-MgPaths {
     }
 
     # Documents location pin: if it CHANGED after install, the Rockstar SDK
-    # breaks (error 1002) - warn the user via config.docsRootChanged
+    # breaks (error 1002) - diagnose warns via the docsPin comparison
     $docsPin = Get-DocsPin
     if ($docsPin -and ($cfg.docsRoot -ne $docsPin)) {   # don't rewrite config on every call
         $cfg.docsRoot = $docsPin
@@ -518,18 +518,28 @@ function Test-AdoptCandidate {
 # vanilla bins: ensure present in the launcher backup dir
 # (safety net against the error-1002 stuck state)
 # ------------------------------------------------------------
+function Get-LatestBinArchive {
+    # newest generation that ACTUALLY contains .bin files.
+    # Empty/torn generations (locked bins, full disk, legacy leftovers) are skipped,
+    # so the 1002 insurance never points at an empty "latest" folder.
+    $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
+    $gens = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+    foreach ($g in $gens) {
+        $files = @(Get-ChildItem $g.FullName -Filter '*.bin' -ErrorAction SilentlyContinue)
+        if ($files.Count -gt 0) { return @{ dir = $g; files = $files } }
+    }
+    return $null
+}
+
 function Ensure-BinsRestored {
     param($Cfg)
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
         if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return 'none' }
         if (@(Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue).Count -gt 0) { return 'present' }
-        $latest = Get-ChildItem (Join-Path $script:HelperDir 'vanilla_backup_archive') -Directory -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending | Select-Object -First 1
-        if (-not $latest) { return 'none' }
-        $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
-        if (-not $files) { return 'none' }
-        $files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        $arc = Get-LatestBinArchive
+        if (-not $arc) { return 'none' }
+        $arc.files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
         return 'restored'
     } catch { return 'none' }
 }
@@ -542,13 +552,10 @@ function Restore-VanillaBackup {
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
         if (-not $bkDir) { return $false }
-        $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
-        $latest = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-        if (-not $latest) { return $false }
-        $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
-        if (-not $files) { return $false }
+        $arc = Get-LatestBinArchive
+        if (-not $arc) { return $false }
         $copied = 0
-        foreach ($f in $files) {
+        foreach ($f in $arc.files) {
             $dst = Join-Path $bkDir $f.Name
             if (-not (Test-Path -LiteralPath $dst)) {
                 Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction SilentlyContinue
@@ -571,11 +578,51 @@ function Archive-VanillaBins {
         if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return $false }
         $bins = @(Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue)
         if ($bins.Count -eq 0) { return $false }
+        # skip the multi-GB copy when the newest good generation is already identical:
+        # launcher bins change only after ITS updates, not every game session.
+        # Copy-Item preserves LastWriteTime, so archived mtime == source mtime.
+        $prev = Get-LatestBinArchive
+        if ($prev) {
+            $unchanged = $true
+            foreach ($b in $bins) {
+                $p = Join-Path $prev.dir.FullName $b.Name
+                if (-not (Test-Path -LiteralPath $p)) { $unchanged = $false; break }
+                $li = Get-Item -LiteralPath $p
+                if (($li.Length -ne $b.Length) -or ($li.LastWriteTimeUtc -ne $b.LastWriteTimeUtc)) { $unchanged = $false; break }
+            }
+            if ($unchanged) {
+                # still run retention so old generations do not pile up
+                $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
+                Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object Name -Descending |
+                    Select-Object -Skip $Keep |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+        }
+        # free-space guard: never start a copy we cannot finish (torn generation)
+        $need = ($bins | Measure-Object Length -Sum).Sum
+        $free = (Get-Item -LiteralPath $script:HelperDir -ErrorAction SilentlyContinue).PSDrive.Free
+        if (($null -ne $free) -and ($free -lt ($need + 500MB))) { return $false }
         $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
         $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
         $dst = Join-Path $arcRoot $stamp
         New-Item -ItemType Directory -Force -Path $dst | Out-Null
-        foreach ($b in $bins) { Copy-Item -LiteralPath $b.FullName -Destination $dst -Force -ErrorAction SilentlyContinue }
+        $ok = 0
+        foreach ($b in $bins) {
+            $d = Join-Path $dst $b.Name
+            # try/catch is mandatory: with $ErrorActionPreference='Stop' in the
+            # caller's scope a locked source THROWS past -ErrorAction, which would
+            # skip the removal below and leave a torn "latest" generation
+            try { Copy-Item -LiteralPath $b.FullName -Destination $d -Force -ErrorAction SilentlyContinue } catch {}
+            # a locked source can leave a 0-byte/partial copy - verify length
+            if ((Test-Path -LiteralPath $d) -and ((Get-Item -LiteralPath $d).Length -eq $b.Length)) { $ok++ }
+        }
+        if ($ok -ne $bins.Count) {
+            # incomplete generation must never become "latest" nor eat retention slots
+            Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue
+            return $false
+        }
         # retention: keep only the newest generations
         Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending |
