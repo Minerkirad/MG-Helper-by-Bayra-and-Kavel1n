@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.2'   # держать в синке с version.json
+$script:Version = '1.6.3'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -45,6 +45,7 @@ function Get-MgConfig {
         autoCleanDlccache = $false
         onExit            = 'adopt'
         sessionGuard      = $true
+        guardWindowSec    = 120
         notifications     = $true
         docsRoot          = (Get-DocsPin)
     }
@@ -294,9 +295,11 @@ function Find-MatchingProcess {
         }
     } catch {}
     if (-not $hits) {
-        $since = ((Get-Date) - $script:lastCimScan).TotalSeconds
-        if ($since -lt 60) { return @($script:lastCimHits) }
-        $script:lastCimScan = Get-Date
+        # cache is PER PATTERN SET: one shared cache made the launcher query return
+        # the game query's result (and vice versa) for up to 60 s
+        $key = ($Patterns -join '|').ToLower()
+        $entry = $script:cimCache[$key]
+        if ($entry -and (((Get-Date) - $entry.at).TotalSeconds -lt 60)) { return @($entry.hits) }
         try {
             foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
                 if ($p.CommandLine) {
@@ -305,12 +308,11 @@ function Find-MatchingProcess {
                 }
             }
         } catch {}
-        $script:lastCimHits = $hits
+        $script:cimCache[$key] = @{ at = (Get-Date); hits = $hits }
     }
     return @($hits | Select-Object -Unique Name, Id, CommandLine)
 }
-$script:lastCimScan = [datetime]::MinValue
-$script:lastCimHits = @()
+$script:cimCache = @{}
 
 # ------------------------------------------------------------
 # one-shot: resolve everything, persist to config, return config.
@@ -441,6 +443,42 @@ function Apply-Golden {
 }
 
 # ------------------------------------------------------------
+# session helpers (used by the watcher, unit-tested by tools\check.ps1)
+# ------------------------------------------------------------
+function Get-FileMtimeUtc {
+    param([string]$Path)
+    try { return (Get-Item -LiteralPath $Path -ErrorAction Stop).LastWriteTimeUtc } catch { return [datetime]::MinValue }
+}
+
+function Test-SameSettings {
+    # whitespace-insensitive compare. TRI-STATE:
+    #   $true/$false - compared;  $null - could not read (the game holds the file
+    #   exclusively). Callers MUST NOT treat $null as drift, otherwise they fight
+    #   the running game with pointless rewrites every few seconds.
+    param([string]$A, [string]$B)
+    try {
+        $ra = [IO.File]::ReadAllText($A)
+        $rb = [IO.File]::ReadAllText($B)
+    } catch { return $null }
+    return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
+}
+
+function Test-GuardActive {
+    # the drift-guard may run ONLY inside the launch window: that is when
+    # Majestic/MG patch settings.xml. Later writes are the user's own changes.
+    param($SessionStart, [int]$WindowSec, [bool]$GuardEnabled, [bool]$GameRunning)
+    if (-not $GuardEnabled -or -not $GameRunning -or -not $SessionStart) { return $false }
+    return (((Get-Date) - $SessionStart).TotalSeconds -lt $WindowSec)
+}
+
+function Test-AdoptCandidate {
+    # pure decision: may the on-disk settings become the new golden?
+    # $Same is the tri-state result of Test-SameSettings.
+    param([bool]$ChangedAfterUs, [bool]$OnExitAdopt, $Same)
+    return ($OnExitAdopt -and $ChangedAfterUs -and ($Same -eq $false))
+}
+
+# ------------------------------------------------------------
 # vanilla bins: ensure present in the launcher backup dir
 # (safety net against the error-1002 stuck state)
 # ------------------------------------------------------------
@@ -455,7 +493,7 @@ function Ensure-BinsRestored {
         if (-not $latest) { return 'none' }
         $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
         if (-not $files) { return 'none' }
-        $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        $files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
         return 'restored'
     } catch { return 'none' }
 }
@@ -470,7 +508,7 @@ function Restore-VanillaBackup {
         if (-not $latest) { return $false }
         $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
         if (-not $files) { return $false }
-        $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        $files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
         return $true
     } catch { return $false }
 }
