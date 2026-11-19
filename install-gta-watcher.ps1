@@ -47,11 +47,13 @@ $deploy = @(
     'common.ps1', 'gta-settings-watcher.ps1', 'MG-Helper.ps1', 'MG-Helper.bat',
     'diagnose.ps1', 'uninstall.ps1', 'repair.ps1', 'reset-settings.ps1',
     'import-settings.ps1', 'clean-majestic-cache.ps1', 'max-fps.ps1', 'cut-shadows.ps1',
-    'restore-mg-snapshot.ps1', 'version.json'
+    'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
 foreach ($f in $deploy) {
     $srcFile = Join-Path $PSScriptRoot $f
+    # Repair runs the DEPLOYED installer: never copy a file onto itself
+    if ([IO.Path]::GetFullPath($srcFile) -eq [IO.Path]::GetFullPath((Join-Path $HelperDir $f))) { continue }
     if (-not (Test-Path -LiteralPath $srcFile)) {
         if ($f -eq 'version.json') {
             Write-Host '[i] version.json missing - using fallback version.' -ForegroundColor DarkGray
@@ -122,7 +124,7 @@ $argLine = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watc
 $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
 $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
-$set = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+$set = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 $regOk = $false
 try {
     Register-ScheduledTask -TaskName 'MG_Helper_Watcher' -Action $action -Trigger @($tLogon, $tRepeat) -Settings $set -Description 'MG Helper watcher (by Bayra & Kavel1n)' -Force -ErrorAction Stop | Out-Null
@@ -142,7 +144,7 @@ Start-Sleep 4
 $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
     Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID })
 if ($alive.Count -gt 0) {
-    Write-Host "[+] Watcher v1.6.2 is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
+    Write-Host "[+] Watcher v$(Get-PkgVersion) is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } else {
