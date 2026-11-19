@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.7.1'   # держать в синке с version.json
+$script:Version = '1.8.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -64,22 +64,33 @@ function Get-MgConfig {
 }
 
 function Save-MgConfig {
+    # MG-CR-001: never destroys the existing config on failure. Non-destructive
+    # flow: write tmp -> validate it parses -> atomic replace. On ANY failure the
+    # old config stays untouched, the tmp is cleaned, $false is returned.
     param($Config)
+    $tmp = $null
     try {
         New-Item -ItemType Directory -Force -Path $script:HelperDir -ErrorAction Stop | Out-Null
         $json = $Config | ConvertTo-Json -Depth 4
-        $tmp = "$script:ConfigFile.tmp"
+        $tmp = "$script:ConfigFile.$PID.tmp"
         [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
-        if (Test-Path -LiteralPath $script:ConfigFile) { [IO.File]::Replace($tmp, $script:ConfigFile, [NullString]::Value) }
-        else { Move-Item -LiteralPath $tmp $script:ConfigFile -Force }
-    } catch {
-        # fallback only when the tmp file was REALLY written - a failure before
-        # that (full disk, broken json) must not delete the valid config
-        if (Test-Path -LiteralPath $tmp) {
-            try {
-                Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
-                Move-Item -LiteralPath $tmp $script:ConfigFile -Force
-            } catch {}
+        # the tmp must be readable JSON before we touch the real config
+        $null = Get-Content -LiteralPath $tmp -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if (Test-Path -LiteralPath $script:ConfigFile) {
+            [IO.File]::Replace($tmp, $script:ConfigFile, [NullString]::Value)
+        }
+        else {
+            [IO.File]::Move($tmp, $script:ConfigFile)
+        }
+        return $true
+    }
+    catch {
+        Write-Warning "MG Helper: config save failed: $_"
+        return $false
+    }
+    finally {
+        if ($tmp -and (Test-Path -LiteralPath $tmp)) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -159,12 +170,26 @@ function Find-GtaGameRoot {
 # (tail order is variant-aware via Find-GtaGameRoot)
 # ------------------------------------------------------------
 function Test-ValidSettingsXml {
+    # MG-CR-003: real XML validation (well-formed document + <Settings> root),
+    # not just a text grep - a torn/partial file must never become the golden.
+    # DTD is prohibited and the resolver is null (no external entities).
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    if ($Path -match '\\Temp\\|_settings_backup|MG_Helper') { return $false }
+    # path-based exclusions live in the DISCOVERY code (Find-SettingsXml) -
+    # golden backups legitimately live inside MG_Helper, so this validator is
+    # pure CONTENT validation
     try {
-        $c = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-        return ($c -match '<Settings>' -and ($c -notmatch '\$\d'))
+        $settings = New-Object System.Xml.XmlReaderSettings
+        $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+        $settings.XmlResolver = $null
+        $reader = [System.Xml.XmlReader]::Create($Path, $settings)
+        try {
+            $doc = New-Object System.Xml.XmlDocument
+            $doc.XmlResolver = $null
+            $doc.Load($reader)
+            return ($doc.DocumentElement -and $doc.DocumentElement.Name -eq 'Settings')
+        }
+        finally { $reader.Dispose() }
     } catch { return $false }
 }
 
@@ -415,7 +440,9 @@ function Resolve-MgPaths {
         $cfg.docsRoot = $docsPin
         $changed = $true
     }
-    if (-not $NoSave -and $changed) { Save-MgConfig $cfg }
+    if (-not $NoSave -and $changed) {
+        if (-not (Save-MgConfig $cfg)) { Write-Warning 'MG Helper: paths discovered but config.json could NOT be saved - discovery will repeat next start' }
+    }
     return $cfg
 }
 
@@ -450,11 +477,12 @@ function Write-Atomic {
 # golden validation + self-heal chain
 # ------------------------------------------------------------
 function Test-GoldenValid {
+    # MG-CR-003: full XML validation + minimum size (MG-CR-003's grep was not enough)
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try {
-        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-        return ($raw.Length -gt 100 -and $raw -match '<Settings>' -and ($raw -notmatch '\$\d'))
+        if ((Get-Item -LiteralPath $Path).Length -le 100) { return $false }
+        return (Test-ValidSettingsXml -Path $Path)
     } catch { return $false }
 }
 
@@ -473,15 +501,22 @@ function Get-ValidGolden {
 }
 
 function Apply-Golden {
+    # MG-CR-002: read the VALIDATED source directly - never re-read from the
+    # possibly-broken golden after a failed heal. The golden file is repaired
+    # first, verified, and only then are the game settings written.
     param($Cfg)
     $src = Get-ValidGolden -CfgSettingsXml $Cfg.settingsXml
     if (-not $src) { return $false }
     $goldenPath = Join-Path $script:HelperDir 'settings.golden.xml'
-    if ($src.healed) {
-        Copy-Item -LiteralPath $src.path $goldenPath -Force -ErrorAction SilentlyContinue
+    try {
+        $goldenBytes = [IO.File]::ReadAllBytes($src.path)
+        if ($src.healed) {
+            if (-not (Write-Atomic -Path $goldenPath -Bytes $goldenBytes)) { return $false }
+            if (-not (Test-GoldenValid $goldenPath)) { return $false }
+        }
+        return (Write-Atomic -Path $Cfg.settingsXml -Bytes $goldenBytes)
     }
-    try { $goldenBytes = [IO.File]::ReadAllBytes($goldenPath) } catch { return $false }
-    return (Write-Atomic -Path $Cfg.settingsXml -Bytes $goldenBytes)
+    catch { return $false }
 }
 
 # ------------------------------------------------------------
@@ -541,16 +576,33 @@ function Get-LatestBinArchive {
 }
 
 function Ensure-BinsRestored {
+    # MG-CR-005: never reports success without verification. Returns:
+    #   'present'  - launcher already has bins
+    #   'restored' - all archived bins copied and size-verified
+    #   'partial'  - some copied, some failed (retry next tick continues)
+    #   'failed'   - nothing copied
+    #   'none'     - no archive / no launcher backup dir
     param($Cfg)
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
         if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return 'none' }
-        if (@(Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue).Count -gt 0) { return 'present' }
+        if (@(Get-ChildItem -LiteralPath $bkDir -Filter '*.bin' -File -ErrorAction SilentlyContinue).Count -gt 0) { return 'present' }
         $arc = Get-LatestBinArchive
-        if (-not $arc) { return 'none' }
-        $arc.files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
-        return 'restored'
-    } catch { return 'none' }
+        if (-not $arc -or $arc.files.Count -eq 0) { return 'none' }
+        $copied = 0
+        $failed = 0
+        foreach ($file in $arc.files) {
+            $destination = Join-Path $bkDir $file.Name
+            try {
+                Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop
+                $actual = Get-Item -LiteralPath $destination -ErrorAction Stop
+                if ($actual.Length -eq $file.Length) { $copied++ } else { $failed++ }
+            } catch { $failed++ }
+        }
+        if ($failed -gt 0) { return 'partial' }
+        if ($copied -eq $arc.files.Count) { return 'restored' }
+        return 'failed'
+    } catch { return 'failed' }
 }
 
 function Restore-VanillaBackup {
