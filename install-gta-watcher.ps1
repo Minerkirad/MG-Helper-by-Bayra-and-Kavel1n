@@ -18,7 +18,7 @@ $Settings = Find-SettingsXml
 if (-not $Settings) {
     Write-Host "[!] Could not find Rockstar Games\GTA V\settings.xml on this PC." -ForegroundColor Red
     Write-Host "    Run GTA V once first, then run this installer again." -ForegroundColor Yellow
-    pause; exit 1
+    exit 1
 }
 Write-Host "[i] settings.xml found: $Settings"
 
@@ -60,7 +60,7 @@ foreach ($f in $deploy) {
             continue
         }
         Write-Host "[!] $f missing next to this installer - re-download the whole package." -ForegroundColor Red
-        pause; exit 1
+        exit 1
     }
     if ($f -like '*.ps1') {
         # ps1 files get BOM (PS 5.1 + Cyrillic), other files copied verbatim
@@ -150,6 +150,7 @@ if ($hostExe) {
         Remove-Item -LiteralPath $smokeScript -Force -ErrorAction SilentlyContinue
         Write-Host "[+] Hidden host smoke-run OK." -ForegroundColor DarkGray
     } catch {
+        Remove-Item -LiteralPath $smokeScript -Force -ErrorAction SilentlyContinue
         Write-Host "[!] Hidden host cannot run on this machine: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "    (AppLocker/WDAC/antivirus likely) - falling back to S4U task." -ForegroundColor Yellow
         $hostExe = $null
