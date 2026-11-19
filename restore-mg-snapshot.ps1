@@ -11,13 +11,13 @@ $cfg = Resolve-MgPaths -NoSave
 $mgDir = $cfg.miamiGraphicsDir
 if (-not $mgDir -or -not (Test-Path -LiteralPath $mgDir)) {
     Write-Host "[!] Miami Graphics не найден на этом ПК - восстанавливать некуда." -ForegroundColor Red
-    pause; exit 1
+    exit 1
 }
 
 $snapDir = Join-Path $HelperDir 'mg_snapshot'
 if (-not (Test-Path $snapDir)) {
     Write-Host "[!] Снапшотов ещё нет - они появятся после первого запуска GTA5." -ForegroundColor Red
-    pause; exit 1
+    exit 1
 }
 
 # only snapshots taken from THIS MG dir (root-qualified names)
@@ -45,7 +45,17 @@ if (Test-Path -LiteralPath $manifestPath) {
 }
 function Get-SnapRelPath([string]$SnapName) {
     if ($mapping.ContainsKey($SnapName)) { return $mapping[$SnapName] }
-    return $SnapName.Substring("$flat`__".Length).Replace('__', '\')   # legacy decode
+    $tail = $SnapName.Substring("$flat`__".Length)
+    # new-format name without a manifest entry: unusable, never decode to 'fN.json'
+    if ($tail -match '^f\d+\.json$') { return $null }
+    return $tail.Replace('__', '\')   # legacy decode only
+}
+
+if ($mapping.Count -gt 0) {
+    # manifest is the source of truth for this root: unmapped files are legacy
+    # or stale leftovers - restoring them could overwrite fresh values (their
+    # LastWriteTime equals the source json's mtime, so sort order is unreliable)
+    $files = @($files | Where-Object { $mapping.ContainsKey($_.Name) })
 }
 
 Write-Host "============================================="
@@ -62,7 +72,7 @@ foreach ($f in $files) {
 Write-Host ""
 Write-Host "[i] Текущие файлы MG будут сохранены в бэкап перед восстановлением." -ForegroundColor Yellow
 $r = Read-Host "Восстановить настройки MG из снапшота? (да/нет)"
-if ($r -notmatch '^(д|да|y|yes)$') { Write-Host "Отменено."; pause; exit 0 }
+if ($r -notmatch '^(д|да|y|yes)$') { Write-Host "Отменено."; exit 0 }
 
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 $preBackup = Join-Path $HelperDir "mg_before_restore_$stamp"
@@ -71,6 +81,10 @@ New-Item -ItemType Directory -Force -Path $preBackup | Out-Null
 $restored = 0
 foreach ($f in $files) {
     $rel = Get-SnapRelPath $f.Name
+    if (-not $rel) {
+        Write-Host "[!] $($f.Name): нет записи в manifest.json - пропущен" -ForegroundColor Yellow
+        continue
+    }
     $target = Join-Path $mgDir $rel
     $targetDir = Split-Path $target
     if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Force -Path $targetDir | Out-Null }
