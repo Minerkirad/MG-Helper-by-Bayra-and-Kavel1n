@@ -135,6 +135,27 @@ try {
     $hostExe = $null
 }
 
+# launchability smoke: AppLocker/WDAC/AV often block unsigned exes from
+# LOCALAPPDATA - the task would register but the watcher would never start.
+if ($hostExe) {
+    try {
+        $smokeScript = Join-Path $HelperDir 'host_smoke.ps1'
+        Set-Content -LiteralPath $smokeScript -Value 'exit 0' -Encoding ASCII
+        $sp = Start-Process $hostExe -ArgumentList "`"$smokeScript`"" -PassThru -WindowStyle Hidden
+        if (-not $sp.WaitForExit(20000)) {
+            try { $sp.Kill() } catch {}
+            throw 'host smoke timeout (20 s)'
+        }
+        if ($sp.ExitCode -ne 0) { throw "host smoke exit code $($sp.ExitCode)" }
+        Remove-Item -LiteralPath $smokeScript -Force -ErrorAction SilentlyContinue
+        Write-Host "[+] Hidden host smoke-run OK." -ForegroundColor DarkGray
+    } catch {
+        Write-Host "[!] Hidden host cannot run on this machine: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    (AppLocker/WDAC/antivirus likely) - falling back to S4U task." -ForegroundColor Yellow
+        $hostExe = $null
+    }
+}
+
 if ($hostExe) {
     $action = New-ScheduledTaskAction -Execute $hostExe -Argument "`"$watcherDst`"" -WorkingDirectory $HelperDir
 } else {
