@@ -245,7 +245,19 @@ if ($ctxt -notmatch 'function Get-LatestBinArchive') { Bad 'common: Get-LatestBi
 if ($ctxt -match 'Select-Object -First 1[\s\S]{0,200}vanilla_backup_archive') { Bad 'common: latest-only bin archive selection is back' }
 if ($ctxt -notmatch '\^\(powershell\|pwsh\|explorer\)') { Bad 'common: explorer process is not excluded from game matching' }
 if ($ctxt -match 'TotalSeconds -lt 60') { Bad 'common: CIM cache TTL must be 20 s (60 s lagged renamed-exe detection)' }
-if ($wtxt -match 'function Snapshot-MgFiles') { Bad 'watcher: must use common.ps1 Snapshot-MgFiles (round-trip testable), not a local copy' }
+if ($ctxt -notmatch '\[NullString\]::Value') { Bad 'common: [IO.File]::Replace without [NullString]::Value (PS 5.1 throws -> silent non-atomic fallback)' }
+# reviewer round-4 regressions
+foreach ($pf in 'max-fps.ps1', 'cut-shadows.ps1') {
+    $ptxt = Get-Content (Join-Path $repo $pf) -Raw
+    if ($ptxt -match 'WriteAllText\(\$file, \$bytes') { Bad "${pf}: WriteAllText(byte[]) writes decimal-garbage (must be WriteAllBytes)" }
+    if ($ptxt -notmatch 'WriteAllBytes\(\$file, \$bytes\)') { Bad "${pf}: no WriteAllBytes fallback" }
+    if ($ptxt -notmatch 'RegexOptions\]::IgnoreCase') { Bad "${pf}: merge is case-sensitive (-match ci vs Replace cs mismatch)" }
+    if ($ptxt -notmatch '\$new2 -ne \$s') { Bad "${pf}: counter must count real replacements" }
+}
+if ($wtxt -notmatch 'new game PID') { Bad 'watcher: fast-relaunch new-PID detection missing' }
+if ($wtxt -notmatch 'PID reuse guard') { Bad 'watcher: takeover does not verify the PID belongs to the game' }
+if ($wtxt -notmatch 'Write-Atomic -Path \$Golden -Bytes \$adoptBytes') { Bad 'watcher: adopt must write golden atomically' }
+if ((Get-Content (Join-Path $repo 'MG-Helper-Host.cs') -Raw) -notmatch '-Smoke') { Bad 'host: -Smoke mutex bypass missing (installer smoke would false-pass)' }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
@@ -278,7 +290,14 @@ $lock = [IO.File]::Open($liveF, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.
 $rF = Archive-VanillaBins -Cfg $cfgF
 $lock.Close(); $lock.Dispose()
 $gensAfter = @(Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory).Count
-if ((-not $rF) -and ($gensAfter -eq $gensBefore)) { Good 'archive: locked bin -> no empty generation' } else { Bad 'archive: torn generation became latest' }
+if ((-not $rF) -and ($gensAfter -eq $gensBefore)) { Good 'archive: locked bin -> no empty generation' }
+else {
+    Write-Host ("    [dbg 11f] rF=$rF before=$gensBefore after=$gensAfter") -ForegroundColor DarkGray
+    Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory | ForEach-Object {
+        Write-Host ("    [dbg 11f] gen " + $_.Name + " files=" + @(Get-ChildItem $_.FullName -Filter '*.bin').Count) -ForegroundColor DarkGray
+    }
+    Bad 'archive: torn generation became latest'
+}
 if (Get-LatestBinArchive) { Good 'archive: helper still finds the good generation' } else { Bad 'archive: helper lost the good generation' }
 
 # 11g. unchanged bins -> no new generation (skip the multi-GB copy)
