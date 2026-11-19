@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.4'   # держать в синке с version.json
+$script:Version = '1.6.5'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -284,6 +284,21 @@ function Get-MajesticBackupDir {
 # powershell/pwsh hosts are EXCLUDED from the command-line fallback
 # (otherwise the watcher mistakes its own tools for Majestic).
 # ------------------------------------------------------------
+function Get-ExeNamesFromCommandLine {
+    # pure: executable base names from a command line. ONLY tokens ending in
+    # .exe count - "notepad C:\...\GTA5\settings.xml" must NOT look like the game.
+    # Renamed binaries still work: launchers pass the real exe as an argument.
+    # Accepted residual: 'explorer /select,"...\GTA5.exe"' still matches (rare).
+    param([string]$CommandLine)
+    if (-not $CommandLine) { return @() }
+    $names = @()
+    foreach ($m in [regex]::Matches($CommandLine, '"([^"]+\.exe)"|(\S+\.exe)(?=\s|"|$)')) {
+        $tok = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+        try { $names += [IO.Path]::GetFileNameWithoutExtension($tok) } catch {}
+    }
+    return @($names | Select-Object -Unique)
+}
+
 function Find-MatchingProcess {
     param([string[]]$Patterns)
     if (-not $Patterns) { return @() }
@@ -302,9 +317,15 @@ function Find-MatchingProcess {
         if ($entry -and (((Get-Date) - $entry.at).TotalSeconds -lt 60)) { return @($entry.hits) }
         try {
             foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
-                if ($p.CommandLine) {
-                    if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
-                    if ($Patterns | Where-Object { $p.CommandLine -match [regex]::Escape($_) }) { $hits += $p }
+                if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
+                $exeNames = @(Get-ExeNamesFromCommandLine $p.CommandLine)
+                if ($p.ExecutablePath) {
+                    try { $exeNames += [IO.Path]::GetFileNameWithoutExtension($p.ExecutablePath) } catch {}
+                }
+                if (-not $exeNames) { continue }
+                if ($exeNames | Where-Object { $n = $_; $Patterns | Where-Object { $n -like "*$_*" } }) {
+                    # Win32_Process has ProcessId, NOT Id - map it, or state.gamePid is $null
+                    $hits += [pscustomobject]@{ Name = $p.Name; Id = [int]$p.ProcessId; CommandLine = $p.CommandLine }
                 }
             }
         } catch {}
@@ -313,6 +334,21 @@ function Find-MatchingProcess {
     return @($hits | Select-Object -Unique Name, Id, CommandLine)
 }
 $script:cimCache = @{}
+
+# TTL cache for expensive profile walks, INCLUDING negative results:
+# without it every menu redraw re-walks the whole profile when MG/Majestic
+# is not installed. -Force bypasses (installer / repair / watcher start).
+$script:walkCache = @{}
+function Get-CachedWalk {
+    param([string]$Key, [scriptblock]$Finder, [int]$TtlSec = 600, [switch]$Force)
+    $e = $script:walkCache[$Key]
+    if (-not $Force -and $e -and (((Get-Date) - $e.at).TotalSeconds -lt $TtlSec)) {
+        if (($null -eq $e.value) -or (Test-Path -LiteralPath $e.value)) { return $e.value }
+    }
+    $v = & $Finder
+    $script:walkCache[$Key] = @{ at = (Get-Date); value = $v }
+    return $v
+}
 
 # ------------------------------------------------------------
 # one-shot: resolve everything, persist to config, return config.
@@ -338,7 +374,7 @@ function Resolve-MgPaths {
         $stale = ((Get-Date) - $last).TotalHours -ge 24
     } catch {}
     if (-not $cachedOk -or $ForceFull -or ($stale -and -not $NoSave)) {
-        $found = Find-SettingsXml
+        $found = Get-CachedWalk -Key 'settingsXml' -Finder { Find-SettingsXml } -Force:$ForceFull
         if ($found) {
             if ($found -ne $cfg.settingsXml) { $changed = $true }
             $cfg.settingsXml = $found
@@ -349,7 +385,7 @@ function Resolve-MgPaths {
 
     # cached MG dir must be content-validated (empty leftovers poison the cache)
     if (-not $cfg.miamiGraphicsDir -or -not (Test-ValidMgDir $cfg.miamiGraphicsDir)) {
-        $found = Find-MiamiGraphicsDir
+        $found = Get-CachedWalk -Key 'miamiGraphicsDir' -Finder { Find-MiamiGraphicsDir } -Force:$ForceFull
         if ($found) {
             if ($found -ne $cfg.miamiGraphicsDir) { $changed = $true }
             $cfg.miamiGraphicsDir = $found
@@ -358,7 +394,7 @@ function Resolve-MgPaths {
     }
     # cached majestic.json must parse and look real
     if (-not $cfg.majesticJson -or -not (Test-ValidMajesticJson $cfg.majesticJson)) {
-        $found = Find-MajesticJson
+        $found = Get-CachedWalk -Key 'majesticJson' -Finder { Find-MajesticJson } -Force:$ForceFull
         if ($found) {
             if ($found -ne $cfg.majesticJson) { $changed = $true }
             $cfg.majesticJson = $found
@@ -369,7 +405,7 @@ function Resolve-MgPaths {
     # Documents location pin: if it CHANGED after install, the Rockstar SDK
     # breaks (error 1002) - warn the user via config.docsRootChanged
     $docsPin = Get-DocsPin
-    if ($docsPin) {
+    if ($docsPin -and ($cfg.docsRoot -ne $docsPin)) {   # don't rewrite config on every call
         $cfg.docsRoot = $docsPin
         $changed = $true
     }
@@ -474,8 +510,11 @@ function Test-GuardActive {
 function Test-AdoptCandidate {
     # pure decision: may the on-disk settings become the new golden?
     # $Same is the tri-state result of Test-SameSettings.
-    param([bool]$ChangedAfterUs, [bool]$OnExitAdopt, $Same)
-    return ($OnExitAdopt -and $ChangedAfterUs -and ($Same -eq $false))
+    # $AppliedThisSession: WE must have applied the golden at least once this
+    # session. Otherwise $lastApplyUtc is MinValue, "changed after us" is always
+    # true, and a Majestic overwrite could be adopted as the user's choice.
+    param([bool]$ChangedAfterUs, [bool]$OnExitAdopt, $Same, [bool]$AppliedThisSession)
+    return ($OnExitAdopt -and $AppliedThisSession -and $ChangedAfterUs -and ($Same -eq $false))
 }
 
 # ------------------------------------------------------------
@@ -499,6 +538,9 @@ function Ensure-BinsRestored {
 }
 
 function Restore-VanillaBackup {
+    # returns archived vanilla bins ONLY where they are missing in the launcher.
+    # A stale archive must never downgrade bins the launcher created/updated
+    # itself - that would re-introduce the Rockstar SDK error 1002.
     param($Cfg)
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
@@ -508,8 +550,15 @@ function Restore-VanillaBackup {
         if (-not $latest) { return $false }
         $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
         if (-not $files) { return $false }
-        $files | Copy-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
-        return $true
+        $copied = 0
+        foreach ($f in $files) {
+            $dst = Join-Path $bkDir $f.Name
+            if (-not (Test-Path -LiteralPath $dst)) {
+                Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction SilentlyContinue
+                $copied++
+            }
+        }
+        return ($copied -gt 0)
     } catch { return $false }
 }
 
