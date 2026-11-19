@@ -1,4 +1,4 @@
-﻿# MG Helper watcher v1.6.1 - by Bayra & Kavel1n
+﻿# MG Helper watcher - by Bayra & Kavel1n
 # State machine (Idle/InGame, persistent), session drift-guard,
 # adopt-on-exit policy, cooperative stop, log rotation, heartbeat.
 # PS 5.1-safe. common.ps1 (dot-sourced) provides discovery/config/shared ops.
@@ -89,15 +89,7 @@ function Save-State {
     }
 }
 
-function Test-SameSettings {
-    # whitespace-insensitive compare (settings.xml may be written with CRLF or LF)
-    param([string]$A, [string]$B)
-    try {
-        $ra = [IO.File]::ReadAllText($A)
-        $rb = [IO.File]::ReadAllText($B)
-        return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
-    } catch { return $false }
-}
+# Test-SameSettings / Get-FileMtimeUtc / Test-GuardActive / Test-AdoptCandidate live in common.ps1
 
 # ---------------- diagnose mode ----------------
 if ($Diagnose) {
@@ -213,13 +205,16 @@ if (-not (Test-GoldenValid $Golden)) {
 }
 
 # ---------------- state machine (persistent) ----------------
-$state = @{ schema = 1; phase = 'Idle'; gamePid = $null; sessionReapplied = $false }
+$state = @{ schema = 2; phase = 'Idle'; gamePid = $null; sessionStart = $null; guardRollbacks = 0; restarts = 0 }
 $stateFile = $StateFile
 try {
     if (Test-Path -LiteralPath $stateFile) {
         $loaded = Get-Content -LiteralPath $stateFile -Raw -ErrorAction Stop | ConvertFrom-Json
         if ($loaded.phase) {
-            $state = @{ schema = 1; phase = $loaded.phase; gamePid = $loaded.gamePid; sessionReapplied = [bool]$loaded.sessionReapplied }
+            # schema 1 had sessionReapplied - deliberately dropped: it silently killed adopt
+            $state = @{ schema = 2; phase = $loaded.phase; gamePid = $loaded.gamePid
+                        sessionStart = $loaded.sessionStart; guardRollbacks = [int]$loaded.guardRollbacks
+                        restarts = [int]$loaded.restarts }
         }
     }
 } catch {}
@@ -230,6 +225,11 @@ if ($cfg.onExit) { $onExit = [string]$cfg.onExit }
 # in-session drift-guard (config kill-switch)
 $sessionGuard = $true
 if ($null -ne $cfg.sessionGuard) { $sessionGuard = [bool]$cfg.sessionGuard }
+# the guard is active ONLY this many seconds after the game starts: that is when
+# Majestic/MG patch settings.xml. Anything written later is the user's own change
+# and must survive until adopt-on-exit. 0 = guard off.
+$GuardWindowSec = 120
+if ($null -ne $cfg.guardWindowSec) { $GuardWindowSec = [int]$cfg.guardWindowSec }
 
 # autostart: verify scheduled task exists (Run key is legacy - NOT recreated)
 if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
@@ -237,11 +237,11 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 
 # unclean-shutdown detection: archived bins exist + nothing running
-if (Ensure-BinsRestored -Cfg $cfg) {
+if ((Ensure-BinsRestored -Cfg $cfg) -eq 'restored') {
     Log "[i] vanilla bins restored from archive (unclean previous session)"
 }
 
-Log "Watcher v1.6.1 started (onExit=$onExit, guard=$sessionGuard, settings: $SettingsXml)"
+Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
 
 $wasRunning = $false
 if ($state.phase -eq 'InGame') {
@@ -253,8 +253,11 @@ if ($state.phase -eq 'InGame') {
 $lastBeat = Get-Date
 $script:wasLauncher = $false
 $errStreak = 0
+$lastErrAt = Get-Date
 $lastGuardReapply = [datetime]::MinValue
-$sessionReapplied = [bool]$state.sessionReapplied
+$lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
+$sessionStart = $null
+if ($state.sessionStart) { try { $sessionStart = [datetime]$state.sessionStart } catch { $sessionStart = $null } }
 
 while ($true) {
     Start-Sleep -Seconds 5
@@ -276,7 +279,7 @@ while ($true) {
         # 1002 insurance: bins must be vanilla BEFORE the launcher patches the game
         if ($launcher -and -not $script:wasLauncher) {
             Log "Majestic launcher started"
-            if (Ensure-BinsRestored -Cfg $cfg) { Log "vanilla bins restored before launcher patch" }
+            if ((Ensure-BinsRestored -Cfg $cfg) -eq 'restored') { Log "vanilla bins restored before launcher patch" }
         }
         $script:wasLauncher = $launcher
 
@@ -291,79 +294,113 @@ while ($true) {
             }
             Copy-Item -LiteralPath $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force -ErrorAction SilentlyContinue
             Ensure-BinsRestored -Cfg $cfg | Out-Null
-            if (Apply-Golden -Cfg $cfg) { Log "GTA5 launched -> settings applied" }
+            $sessionStart = Get-Date
+            $lastGuardReapply = [datetime]::MinValue
+            if (Apply-Golden -Cfg $cfg) {
+                Log "GTA5 launched -> settings applied"
+                $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+            }
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             $state.phase = 'InGame'
             $state.gamePid = (@(Find-MatchingProcess -Patterns $cfg.gameProcesses) | Select-Object -First 1).Id
-            $state.sessionReapplied = $false
+            $state.sessionStart = $sessionStart.ToString('o')
+            $state.guardRollbacks = 0
             Save-State $state
             Start-Sleep -Seconds 3
-            # one safety re-apply if overwritten right after launch
-            if ((Find-MatchingProcess -Patterns $cfg.gameProcesses) -and -not (Test-SameSettings $cfg.settingsXml $Golden)) {
+            # one safety re-apply if overwritten right after launch ($null = unreadable -> skip)
+            if ((Find-MatchingProcess -Patterns $cfg.gameProcesses) -and ((Test-SameSettings $cfg.settingsXml $Golden) -eq $false)) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "settings re-applied (was overwritten after launch)"
-                    $sessionReapplied = $true
-                    $state.sessionReapplied = $true
-                    Save-State $state
+                    $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                 }
             }
         }
         elseif (-not $running -and $wasRunning) {
             Start-Sleep -Seconds 3
             $adopted = $false
-            if ($onExit -eq 'adopt' -and -not $sessionReapplied -and (Test-ValidSettingsXml $cfg.settingsXml)) {
-                # adopt: user's in-game changes survive (default policy)
-                if (-not (Test-SameSettings $cfg.settingsXml $Golden)) {
-                    $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
-                    Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
-                    Copy-Item -LiteralPath $cfg.settingsXml $Golden -Force -ErrorAction SilentlyContinue
-                    Log "exit: settings changed in game - adopted as new golden"
-                    $adopted = $true
-                } else {
-                    Log "GTA5 closed -> settings unchanged, golden kept"
-                }
+            $same = Test-SameSettings $cfg.settingsXml $Golden          # $true / $false / $null
+            $changedAfterUs = ((Get-FileMtimeUtc $cfg.settingsXml) -gt $lastApplyUtc.AddSeconds(2))
+            if ((Test-AdoptCandidate $changedAfterUs ($onExit -eq 'adopt') $same) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
+                # adopt: the user's in-game changes become the new golden
+                $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+                Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
+                Copy-Item -LiteralPath $cfg.settingsXml $Golden -Force -ErrorAction SilentlyContinue
+                Log "exit: settings changed in game - adopted as new golden"
+                $adopted = $true
             }
-            if (-not $adopted) {
-                if (Apply-Golden -Cfg $cfg) { Log "GTA5 closed -> golden restored" }
+            elseif ($null -eq $same) { Log "[i] exit: settings.xml unreadable - golden kept, adopt skipped" }
+            elseif ($same) { Log "GTA5 closed -> settings unchanged, golden kept" }
+            elseif (-not $changedAfterUs) { Log "GTA5 closed -> nobody wrote after our apply - golden kept" }
+            else { Log "GTA5 closed -> onExit=$onExit - user changes not adopted" }
+            if (-not $adopted -and ($same -eq $false)) {
+                if (Apply-Golden -Cfg $cfg) {
+                    Log "GTA5 closed -> golden restored"
+                    $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                }
             }
             Restore-VanillaBackup -Cfg $cfg | Out-Null
             $state.phase = 'Idle'
             $state.gamePid = $null
-            $state.sessionReapplied = $false
+            $state.sessionStart = $null
+            $state.guardRollbacks = 0
             Save-State $state
-            $sessionReapplied = $false
+            $sessionStart = $null
         }
-        $wasRunning = $running
-
-        # drift-guard: while the game runs, foreign overwrites are rolled back (30 s cooldown)
-        if ($running -and $sessionGuard -and ((Get-Date) - $lastGuardReapply).TotalSeconds -ge 30) {
-            if (-not (Test-SameSettings $cfg.settingsXml $Golden)) {
+        # drift-guard: ONLY inside the launch window (Test-GuardActive).
+        # Rollbacks here are foreign overwrites by Majestic/MG - they must NOT
+        # disable adopt-on-exit: the user's own later changes are legitimate.
+        if ((Test-GuardActive $sessionStart $GuardWindowSec $sessionGuard $running) -and
+            ((Get-Date) - $lastGuardReapply).TotalSeconds -ge 10) {
+            $same = Test-SameSettings $cfg.settingsXml $Golden
+            if ($same -eq $false) {
                 if (Apply-Golden -Cfg $cfg) {
-                    Log "session guard: foreign overwrite detected - golden re-applied"
-                    $lastGuardReapply = Get-Date
-                    $sessionReapplied = $true
-                    $state.sessionReapplied = $true
+                    Log "session guard: foreign overwrite in launch window - golden re-applied"
+                    $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                    $state.guardRollbacks = [int]$state.guardRollbacks + 1
                     Save-State $state
                 }
             }
+            # equal or unreadable (game holds the file) -> back off, do not hammer the disk
+            $lastGuardReapply = Get-Date
         }
 
         $errStreak = 0
 
         # heartbeat every 30 min
         if (((Get-Date) - $lastBeat).TotalMinutes -ge 30) {
-            Log "heartbeat: alive (phase: $($state.phase), settings: $($cfg.settingsXml))"
+            Log "heartbeat: alive (phase: $($state.phase), settings: $($cfg.settingsXml), guardRollbacks: $([int]$state.guardRollbacks))"
             $lastBeat = Get-Date
+            if (([int]$state.restarts -gt 0) -and ((Get-Date) - $lastErrAt).TotalMinutes -ge 30) {
+                $state.restarts = 0; Save-State $state   # healthy 30 min - reset the restart budget
+            }
         }
     } catch {
         $errStreak++
+        $lastErrAt = Get-Date
         Log "[!] Error ($errStreak in a row): $_"
         if ($errStreak -ge 3) {
-            Log "[!] 3 consecutive errors - restarting watcher in 30 s"
-            Start-Sleep -Seconds 30
-            Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
+            $restarts = [int]$state.restarts + 1
+            $state.restarts = $restarts
+            Save-State $state
+            if ($restarts -gt 5) {
+                Log "[!] self-restart budget exhausted - exiting, scheduled task will retry within 10 min"
+                $state.restarts = 0
+                Save-State $state
+                exit 1
+            }
+            $delay = [int][Math]::Min(300, 30 * [Math]::Pow(2, $restarts - 1))
+            Log "[!] 3 consecutive errors - self-restart #$restarts in $delay s"
+            Start-Sleep -Seconds $delay
+            # release the single-instance mutex BEFORE spawning the child, otherwise
+            # the child loses WaitOne(0) against us and dies immediately
+            try { $mutex.ReleaseMutex(); $mutex.Dispose() } catch {}
+            $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            Start-Process $psExe -ArgumentList '-NoProfile','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
             exit 1
         }
+    } finally {
+        # the state invariant must hold even if a branch threw half-way through
+        if ($null -ne $running) { $wasRunning = $running }
     }
 }
 
