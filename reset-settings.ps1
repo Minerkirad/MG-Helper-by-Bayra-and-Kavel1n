@@ -34,13 +34,24 @@ if (Test-Path $ConfigFile) {
 if (-not $Settings) { $Settings = Find-SettingsXml }
 
 if (-not (Test-Path $Golden)) {
-    Write-Host "[!] Golden not found. Run 1-install.bat first." -ForegroundColor Red
+    Write-Host "[!] Эталон не найден. Сначала выполни пункт меню [1] Установка." -ForegroundColor Red
     pause; exit 1
 }
 if (-not $Settings) {
-    Write-Host "[!] settings.xml not found on this PC." -ForegroundColor Red
-    Write-Host "    Run GTA V once, or put the path into $ConfigFile (settingsXml)." -ForegroundColor DarkGray
+    Write-Host "[!] settings.xml не найден на этом ПК." -ForegroundColor Red
+    Write-Host "    Запусти GTA V один раз, или впиши путь в $ConfigFile (settingsXml)." -ForegroundColor DarkGray
     pause; exit 1
+}
+# source must be valid - otherwise we would "protect" a broken file
+if ((Test-GoldenValid $Settings) -eq $false -and $common) {
+    Write-Host '[!] Текущий settings.xml пуст или повреждён - эталон НЕ обновлён.' -ForegroundColor Red
+    Write-Host '    Запусти игру один раз, выстави графику, выйди и повтори.'
+    pause; exit 1
+}
+if (Get-Process -Name 'GTA5','GTA5_Enhanced' -ErrorAction SilentlyContinue) {
+    Write-Host '[!] GTA5 запущена - настройки могут быть перезаписаны при выходе.' -ForegroundColor Yellow
+    $r = Read-Host 'Всё равно продолжить? (да/нет)'
+    if ($r -notmatch '^(д|да|y|yes)$') { Write-Host 'Отменено.'; pause; exit 0 }
 }
 
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
