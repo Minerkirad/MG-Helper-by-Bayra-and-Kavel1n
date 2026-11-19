@@ -36,7 +36,7 @@ if (Test-Path $ConfigFile) {
 if (-not $Settings) { $Settings = Find-SettingsXml }
 
 if (-not (Test-Path $Golden)) {
-    Write-Host "[!] Golden not found. Run 1-install.bat first." -ForegroundColor Red
+    Write-Host "[!] Golden not found. Run MG-Helper.bat -> [1] first." -ForegroundColor Red
     pause; exit 1
 }
 if (-not (Test-Path $Src)) {
@@ -50,15 +50,27 @@ if (-not $Settings) {
     pause; exit 1
 }
 
-$src = Get-Content $Src -Raw
-if (-not ($src -match '<Settings>') -or ($src -match '\$\d')) {
+# refuse to fight a running game: it holds settings.xml and rewrites it on exit
+$gameProcs = @('GTA5', 'GTA5_Enhanced')
+if (Get-Command Find-MatchingProcess -ErrorAction SilentlyContinue) {
+    $gameRunning = [bool](Find-MatchingProcess -Patterns $gameProcs)
+} else {
+    $gameRunning = [bool](Get-Process -Name $gameProcs -ErrorAction SilentlyContinue)
+}
+if ($gameRunning) {
+    Write-Host "[!] GTA V is running - close the game first, then import again." -ForegroundColor Red
+    pause; exit 1
+}
+
+$srcText = Get-Content $Src -Raw   # NOT $src: PowerShell is case-insensitive, $Src is the PATH
+if (-not ($srcText -match '<Settings>') -or ($srcText -match '\$\d')) {
     Write-Host "[!] The provided settings.xml is not valid - aborted, nothing changed." -ForegroundColor Red
     pause; exit 1
 }
 
 # video block sanity: this PC's GPU must match the file's GPU (else GTA would re-detect)
 $thisGpu = ([regex]::Match((Get-Content $Settings -Raw), '<VideoCardDescription>([^<]+)</VideoCardDescription>')).Groups[1].Value
-$fileGpu = ([regex]::Match($src, '<VideoCardDescription>([^<]+)</VideoCardDescription>')).Groups[1].Value
+$fileGpu = ([regex]::Match($srcText, '<VideoCardDescription>([^<]+)</VideoCardDescription>')).Groups[1].Value
 if ($thisGpu -and $fileGpu -and ($thisGpu -ne $fileGpu)) {
     Write-Host "[!] GPU mismatch:" -ForegroundColor Red
     Write-Host "    file:    $fileGpu"
@@ -68,9 +80,22 @@ if ($thisGpu -and $fileGpu -and ($thisGpu -ne $fileGpu)) {
 }
 
 Copy-Item $Golden (Join-Path $HelperDir 'settings.golden.xml.before_import.bak') -Force
-if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
-[IO.File]::WriteAllText($Golden, $src, [Text.UTF8Encoding]::new($true))
-[IO.File]::WriteAllText($Settings, $src, [Text.UTF8Encoding]::new($true))
+$bytes = [Text.UTF8Encoding]::new($true).GetBytes($srcText)
+$liveOk = $true
+if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
+    if (-not (Write-Atomic -Path $Golden -Bytes $bytes)) {
+        Write-Host "[!] could not write golden (locked?) - aborted, nothing changed." -ForegroundColor Red
+        pause; exit 1
+    }
+    $liveOk = Write-Atomic -Path $Settings -Bytes $bytes   # Write-Atomic clears read-only itself
+} else {
+    if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
+    [IO.File]::WriteAllText($Golden, $srcText, [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText($Settings, $srcText, [Text.UTF8Encoding]::new($true))
+}
+if (-not $liveOk) {
+    Write-Host "[!] golden updated, but live settings.xml is locked - the watcher applies it at next launch." -ForegroundColor Yellow
+}
 
 Write-Host "[+] Your personal settings are now the golden ones and applied." -ForegroundColor Green
 Write-Host "[+] Previous golden saved as settings.golden.xml.before_import.bak" -ForegroundColor DarkGray
