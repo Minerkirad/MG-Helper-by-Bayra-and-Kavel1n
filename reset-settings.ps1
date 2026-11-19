@@ -57,7 +57,24 @@ if (Get-Process -Name 'GTA5','GTA5_Enhanced' -ErrorAction SilentlyContinue) {
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 Copy-Item $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force
 if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
-Copy-Item $Settings $Golden -Force
+
+# MG-CR-008: atomic write + verify the NEW golden before claiming success
+$resetBytes = [IO.File]::ReadAllBytes($Settings)
+$resetOk = $false
+if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
+    $resetOk = Write-Atomic -Path $Golden -Bytes $resetBytes
+} else {
+    try { [IO.File]::WriteAllBytes($Golden, $resetBytes); $resetOk = $true } catch { $resetOk = $false }
+}
+if (-not $resetOk) {
+    Write-Host "[!] Не удалось записать эталон (файл заблокирован?) - эталон НЕ изменён, старая копия: settings.golden.xml.old_$stamp" -ForegroundColor Red
+    exit 1
+}
+if ($common -and -not (Test-GoldenValid $Golden)) {
+    Write-Host "[!] Новый эталон не прошёл проверку после записи - восстановлена прежняя копия." -ForegroundColor Red
+    Copy-Item (Join-Path $HelperDir "settings.golden.xml.old_$stamp") $Golden -Force
+    exit 1
+}
 
 $raw = Get-Content $Golden -Raw
 $tq = [regex]::Match($raw, '<TextureQuality value="([^"]+)"').Groups[1].Value
