@@ -80,4 +80,3 @@ Get-ChildItem $cachePath -File -ErrorAction SilentlyContinue | Remove-Item -Forc
 $left = (Get-ChildItem $cachePath -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB
 Write-Host ''
 Write-Host ('[+] Готово. Осталось: {0:N0} MB' -f $left) -ForegroundColor Green
-pause
