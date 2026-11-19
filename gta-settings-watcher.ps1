@@ -256,6 +256,7 @@ $errStreak = 0
 $lastErrAt = Get-Date
 $lastGuardReapply = [datetime]::MinValue
 $lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
+$script:restartPending = $false
 $sessionStart = $null
 if ($state.sessionStart) { try { $sessionStart = [datetime]$state.sessionStart } catch { $sessionStart = $null } }
 
@@ -345,6 +346,19 @@ while ($true) {
             $state.guardRollbacks = 0
             Save-State $state
             $sessionStart = $null
+            # deferred self-restart: safe now that the game is closed
+            if ($script:restartPending) {
+                $script:restartPending = $false
+                Log "deferred restart now (game closed)"
+                try { $mutex.ReleaseMutex(); $mutex.Dispose() } catch {}
+                $hostExe = Join-Path $HelperDir 'MG-Helper-Host.exe'
+                if (Test-Path -LiteralPath $hostExe) {
+                    Start-Process $hostExe -ArgumentList "`"$PSCommandPath`""
+                } else {
+                    Start-Process powershell -ArgumentList '-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
+                }
+                exit 1
+            }
         }
         # drift-guard: ONLY inside the launch window (Test-GuardActive).
         # Rollbacks here are foreign overwrites by Majestic/MG - they must NOT
@@ -379,24 +393,37 @@ while ($true) {
         $lastErrAt = Get-Date
         Log "[!] Error ($errStreak in a row): $_"
         if ($errStreak -ge 3) {
-            $restarts = [int]$state.restarts + 1
-            $state.restarts = $restarts
-            Save-State $state
-            if ($restarts -gt 5) {
-                Log "[!] self-restart budget exhausted - exiting, scheduled task will retry within 10 min"
-                $state.restarts = 0
+            # during a game session do NOT respawn: any spawn may steal focus and
+            # minimise a fullscreen game - defer until the exit branch runs
+            if (Find-MatchingProcess -Patterns $cfg.gameProcesses) {
+                Log "[!] errors during game session - restart deferred until exit"
+                $script:restartPending = $true
+                $errStreak = 0
+            } else {
+                $restarts = [int]$state.restarts + 1
+                $state.restarts = $restarts
                 Save-State $state
+                if ($restarts -gt 5) {
+                    Log "[!] self-restart budget exhausted - exiting, scheduled task will retry within 10 min"
+                    $state.restarts = 0
+                    Save-State $state
+                    exit 1
+                }
+                $delay = [int][Math]::Min(300, 30 * [Math]::Pow(2, $restarts - 1))
+                Log "[!] 3 consecutive errors - self-restart #$restarts in $delay s"
+                Start-Sleep -Seconds $delay
+                # release the single-instance mutex BEFORE spawning the child, otherwise
+                # the child loses WaitOne(0) against us and dies immediately
+                try { $mutex.ReleaseMutex(); $mutex.Dispose() } catch {}
+                # the hidden host spawns PowerShell with CreateNoWindow - no console flash
+                $hostExe = Join-Path $HelperDir 'MG-Helper-Host.exe'
+                if (Test-Path -LiteralPath $hostExe) {
+                    Start-Process $hostExe -ArgumentList "`"$PSCommandPath`""
+                } else {
+                    Start-Process powershell -ArgumentList '-NoProfile','-NonInteractive','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
+                }
                 exit 1
             }
-            $delay = [int][Math]::Min(300, 30 * [Math]::Pow(2, $restarts - 1))
-            Log "[!] 3 consecutive errors - self-restart #$restarts in $delay s"
-            Start-Sleep -Seconds $delay
-            # release the single-instance mutex BEFORE spawning the child, otherwise
-            # the child loses WaitOne(0) against us and dies immediately
-            try { $mutex.ReleaseMutex(); $mutex.Dispose() } catch {}
-            $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-            Start-Process $psExe -ArgumentList '-NoProfile','-WindowStyle','Hidden','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"" -WindowStyle Hidden
-            exit 1
         }
     } finally {
         # the state invariant must hold even if a branch threw half-way through
