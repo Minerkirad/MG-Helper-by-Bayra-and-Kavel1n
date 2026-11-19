@@ -28,7 +28,24 @@ if (-not $files) {
     Write-Host "    Доступные снапшоты:" -ForegroundColor Yellow
     Get-ChildItem $snapDir -File | ForEach-Object { Write-Host "      $($_.Name)" -ForegroundColor DarkGray }
     Write-Host "    Снапшоты с другого расположения MG на эту папку не переносятся."
-    pause; exit 1
+    exit 1
+}
+
+# decode mapping: manifest.json is unambiguous (the legacy '__' flattening breaks
+# if a folder/file name itself contains '__'); legacy decode is the fallback
+$mapping = @{}
+$manifestPath = Join-Path $snapDir 'manifest.json'
+if (Test-Path -LiteralPath $manifestPath) {
+    try {
+        $m = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        foreach ($p in $m.PSObject.Properties) {
+            if ($p.Name.StartsWith("$flat`__")) { $mapping[$p.Name] = $p.Value }
+        }
+    } catch {}
+}
+function Get-SnapRelPath([string]$SnapName) {
+    if ($mapping.ContainsKey($SnapName)) { return $mapping[$SnapName] }
+    return $SnapName.Substring("$flat`__".Length).Replace('__', '\')   # legacy decode
 }
 
 Write-Host "============================================="
@@ -39,7 +56,7 @@ Write-Host "MG папка:   $mgDir"
 Write-Host "Файлов в снапшоте: $($files.Count)"
 Write-Host ""
 foreach ($f in $files) {
-    $rel = $f.Name.Substring("$flat`__".Length).Replace('__', '\')
+    $rel = Get-SnapRelPath $f.Name
     Write-Host "  $rel"
 }
 Write-Host ""
@@ -53,7 +70,7 @@ New-Item -ItemType Directory -Force -Path $preBackup | Out-Null
 
 $restored = 0
 foreach ($f in $files) {
-    $rel = $f.Name.Substring("$flat`__".Length).Replace('__', '\')
+    $rel = Get-SnapRelPath $f.Name
     $target = Join-Path $mgDir $rel
     $targetDir = Split-Path $target
     if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Force -Path $targetDir | Out-Null }
@@ -67,4 +84,3 @@ Write-Host "[+] Восстановлено файлов: $restored" -ForegroundC
 Write-Host "[+] Прежние файлы MG: $preBackup" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Перезапусти лаунчер Miami Graphics, чтобы он подхватил восстановленные настройки." -ForegroundColor Cyan
-pause
