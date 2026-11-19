@@ -11,8 +11,8 @@ Get-ChildItem -LiteralPath $root -File -ErrorAction SilentlyContinue | Unblock-F
 
 $HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 
-# --- update check: GitHub Releases latest vs this package version (once per 24h, silent on errors) ---
-$PkgVersion = '1.4.1'
+# --- update check: GitHub Releases latest vs version.json (once per 24h, silent on errors) ---
+$script:PkgVersion = Get-PkgVersion
 $RepoSlug   = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $global:UpdateMessage = $null
 function Check-Updates {
@@ -24,9 +24,11 @@ function Check-Updates {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoSlug/releases/latest" -UseBasicParsing -TimeoutSec 10
         $tag = ($rel.tag_name -replace '^v','')
-        if ($tag -and ($tag -ne $PkgVersion)) {
-            $global:UpdateMessage = "Доступна новая версия: v$tag (у тебя $PkgVersion). Скачай ZIP на $RepoSlug/releases"
-        }
+        try {
+            if ($tag -and ([version]$tag -gt [version]$script:PkgVersion)) {
+                $global:UpdateMessage = "Доступна новая версия: v$tag (у тебя $script:PkgVersion). Скачай ZIP: $RepoSlug/releases"
+            }
+        } catch {}
     } catch { }   # offline / rate limit / GitHub недоступен - просто молчим
 }
 Check-Updates
@@ -38,9 +40,14 @@ function Confirm-It([string]$Text) {
 
 function Run-Step([string]$Label, [scriptblock]$Body) {
     Write-Host "`n--- $Label ---" -ForegroundColor Cyan
+    $global:LASTEXITCODE = 0
     & $Body
-    Write-Host "[OK] Готово (если выше была ошибка - смотри текст или пункт [7])" -ForegroundColor DarkGray
-    Read-Host "Нажми Enter, чтобы вернуться в меню" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host '[OK] Готово' -ForegroundColor Green
+    } else {
+        Write-Host "[!] Скрипт завершился с ошибкой (код $LASTEXITCODE). Если не помогло - пункт [8] Диагностика." -ForegroundColor Red
+    }
+    Read-Host 'Нажми Enter, чтобы вернуться в меню' | Out-Null
 }
 
 function Show-Menu {
@@ -52,7 +59,8 @@ function Show-Menu {
     # status header
     $cfg = Resolve-MgPaths -NoSave
     $installed = Test-Path (Join-Path $HelperDir 'gta-settings-watcher.ps1')
-    $watchAlive = @(Find-MatchingProcess -Patterns @('gta-settings-watcher')).Count -gt 0
+    $watchAlive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
+        Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' }).Count -gt 0
     $mgOk = $cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $cfg.miamiGraphicsDir)
     $sxOk = $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)
 
@@ -68,7 +76,7 @@ function Show-Menu {
     if ($global:UpdateMessage) { Write-Host "  ОБНОВЛЕНИЕ:     $($global:UpdateMessage)" -ForegroundColor Yellow }
     Write-Host "=========================================================="
     Write-Host ""
-    Write-Host "  MG Helper v$script:Version - by Bayra & Kavel1n"
+    Write-Host "  MG Helper v$script:PkgVersion - by Bayra & Kavel1n"
     Write-Host ""
     Write-Host "  [1] Установка          (запустить один раз)"
     Write-Host "  [2] Reset settings     (текущие настройки станут защищёнными)"
@@ -108,11 +116,13 @@ while ($true) {
         '8' { Run-Step "Diagnose" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'diagnose.ps1') } }
         '9' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
         '10' {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'uninstall.ps1')
-            Write-Host ""
-            Write-Host "Удалено. Эту папку можно удалить."
-            Read-Host "Нажми Enter для выхода"
-            exit 0
+            if (Confirm-It 'Удалить watcher и автозапуск? Бэкапы и эталон останутся.') {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'uninstall.ps1')
+                Write-Host ''
+                Write-Host 'Удалено. Эту папку можно удалить.'
+                Read-Host 'Нажми Enter для выхода'
+                exit 0
+            }
         }
         '0' { exit 0 }
         default {
