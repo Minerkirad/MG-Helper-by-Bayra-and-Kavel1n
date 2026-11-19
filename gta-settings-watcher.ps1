@@ -30,57 +30,6 @@ function Log($msg) {
     if ($Foreground) { Write-Host $line }
 }
 
-function Snapshot-MgFiles {
-    # saves a full copy of MG json settings (nothing is ever deleted)
-    param($Cfg)
-    try {
-        $dirs = @()
-        if ($Cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $Cfg.miamiGraphicsDir)) { $dirs += $Cfg.miamiGraphicsDir }
-        foreach ($root in @($env:APPDATA, $env:LOCALAPPDATA)) {
-            $c = Join-Path $root 'MiamiGraphics'
-            if ((Test-Path -LiteralPath $c) -and ($dirs -notcontains $c)) { $dirs += $c }
-        }
-        if (@($dirs).Count -eq 0) { Log "[i] MG dirs not found - snapshot skipped"; return }
-        $snapDir = Join-Path $HelperDir 'mg_snapshot'
-        New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
-        # manifest maps snapshot file -> original relative path. The legacy '__'
-        # flattening is ambiguous if a folder/file name itself contains '__';
-        # restore prefers the manifest and falls back to the legacy decode.
-        $manifest = [ordered]@{}
-        $rootPrefixes = @{}
-        $n = 0
-        foreach ($dir in $dirs) {
-            $rootFlat = ($dir -replace '[:\\/]', '_')
-            foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
-                $name = "$rootFlat`__f$n.json"
-                $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
-                $rootPrefixes[$rootFlat] = $true
-                Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $name) -Force
-                $n++
-            }
-        }
-        if ($n -gt 0) {
-            # atomic manifest write: a torn manifest.json must never exist
-            $mf = Join-Path $snapDir 'manifest.json'
-            $tmp = "$mf.tmp"
-            [IO.File]::WriteAllText($tmp, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
-            if (Test-Path -LiteralPath $mf) { [IO.File]::Replace($tmp, $mf, [NullString]::Value) }
-            else { Move-Item -LiteralPath $tmp -Destination $mf -Force }
-            # ONLY AFTER the manifest is durable: drop stale files of each snapshotted
-            # root that are not in the fresh manifest (legacy '__' names from old
-            # versions, jsons deleted from MG). Otherwise they resurrect on restore.
-            foreach ($flat in $rootPrefixes.Keys) {
-                Get-ChildItem $snapDir -File -Filter "$flat`__*" -ErrorAction SilentlyContinue |
-                    Where-Object { -not $manifest.Contains($_.Name) } |
-                    Remove-Item -Force -ErrorAction SilentlyContinue
-            }
-            Log "MG snapshot saved ($n files -> $snapDir)"
-        }
-    } catch {
-        Log "[!] MG snapshot error: $_"
-    }
-}
-
 function Clean-Dlccache {
     # archives dlccache .dat files into a backup folder instead of deleting (opt-in)
     param($Cfg)
@@ -324,7 +273,7 @@ while ($true) {
         if (-not $running -and ($state.phase -eq 'InGame')) { $wasRunning = $true }
 
         if ($running -and -not $wasRunning) {
-            Snapshot-MgFiles -Cfg $cfg
+            Snapshot-MgFiles -Cfg $cfg -Logger ${function:Log}
             if ((Get-Item -LiteralPath $cfg.settingsXml -ErrorAction SilentlyContinue).IsReadOnly) {
                 Set-ItemProperty -LiteralPath $cfg.settingsXml -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                 Log "settings.xml was read-only - attribute cleared"
@@ -486,3 +435,5 @@ while ($true) {
 }
 
 Log "watcher stopped"
+# Snapshot-MgFiles lives in common.ps1 (Logger-aware, unit-tested by tools/check.ps1)
+
