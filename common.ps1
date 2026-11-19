@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.7.0'   # держать в синке с version.json
+$script:Version = '1.7.1'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -73,10 +73,14 @@ function Save-MgConfig {
         if (Test-Path -LiteralPath $script:ConfigFile) { [IO.File]::Replace($tmp, $script:ConfigFile, [NullString]::Value) }
         else { Move-Item -LiteralPath $tmp $script:ConfigFile -Force }
     } catch {
-        try {
-            Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
-            Move-Item -LiteralPath $tmp $script:ConfigFile -Force
-        } catch {}
+        # fallback only when the tmp file was REALLY written - a failure before
+        # that (full disk, broken json) must not delete the valid config
+        if (Test-Path -LiteralPath $tmp) {
+            try {
+                Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
+                Move-Item -LiteralPath $tmp $script:ConfigFile -Force
+            } catch {}
+        }
     }
 }
 
@@ -313,6 +317,7 @@ function Find-MatchingProcess {
         $key = ($Patterns -join '|').ToLower()
         $entry = $script:cimCache[$key]
         if ($entry -and (((Get-Date) - $entry.at).TotalSeconds -lt 20)) { return @($entry.hits) }
+        $cimOk = $false
         try {
             foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
                 # explorer too: 'explorer /select,"...\GTA5.exe"' must not look like the game
@@ -327,8 +332,10 @@ function Find-MatchingProcess {
                     $hits += [pscustomobject]@{ Name = $p.Name; Id = [int]$p.ProcessId; CommandLine = $p.CommandLine }
                 }
             }
+            $cimOk = $true
         } catch {}
-        $script:cimCache[$key] = @{ at = (Get-Date); hits = $hits }
+        # cache only on a clean scan - a failed query must not poison the cache
+        if ($cimOk) { $script:cimCache[$key] = @{ at = (Get-Date); hits = $hits } }
     }
     return @($hits | Select-Object -Unique Name, Id, CommandLine)
 }
@@ -417,7 +424,7 @@ function Resolve-MgPaths {
 # ------------------------------------------------------------
 function Write-Atomic {
     param([string]$Path, [byte[]]$Bytes)
-    $tmp = "$Path.mgtmp"
+    $tmp = "$Path.$PID.mgtmp"   # per-PID suffix: two concurrent writers must not share one tmp
     for ($try = 1; $try -le 3; $try++) {
         try {
             [IO.File]::WriteAllBytes($tmp, $Bytes)          # ВСЕГДА пишем tmp первым
@@ -609,6 +616,10 @@ function Archive-VanillaBins {
         $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
         $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
         $dst = Join-Path $arcRoot $stamp
+        # stamp collision: two calls within one second must not share a folder -
+        # a failed copy into an EXISTING generation would delete its contents
+        $uniq = 0
+        while (Test-Path -LiteralPath $dst) { $uniq++; $dst = Join-Path $arcRoot ("$stamp-$uniq") }
         New-Item -ItemType Directory -Force -Path $dst | Out-Null
         $ok = 0
         foreach ($b in $bins) {
