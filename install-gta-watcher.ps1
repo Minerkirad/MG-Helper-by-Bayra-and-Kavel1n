@@ -198,5 +198,4 @@ if ($alive.Count -gt 0) {
 } else {
     Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [8] Diagnose." -ForegroundColor Red
 }
-pause
 
