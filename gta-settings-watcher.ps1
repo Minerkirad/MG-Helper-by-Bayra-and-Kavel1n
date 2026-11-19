@@ -43,16 +43,24 @@ function Snapshot-MgFiles {
         if (@($dirs).Count -eq 0) { Log "[i] MG dirs not found - snapshot skipped"; return }
         $snapDir = Join-Path $HelperDir 'mg_snapshot'
         New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
+        # manifest maps snapshot file -> original relative path. The legacy '__'
+        # flattening is ambiguous if a folder/file name itself contains '__';
+        # restore prefers the manifest and falls back to the legacy decode.
+        $manifest = [ordered]@{}
         $n = 0
         foreach ($dir in $dirs) {
             $rootFlat = ($dir -replace '[:\\/]', '_')
             foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
-                $rel = ($rootFlat + '__' + $f.FullName.Substring($dir.Length).TrimStart('\')) -replace '[\\/]', '__'
-                Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $rel) -Force
+                $name = "$rootFlat`__f$n.json"
+                $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
+                Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $name) -Force
                 $n++
             }
         }
-        if ($n -gt 0) { Log "MG snapshot saved ($n files -> $snapDir)" }
+        if ($n -gt 0) {
+            [IO.File]::WriteAllText((Join-Path $snapDir 'manifest.json'), ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            Log "MG snapshot saved ($n files -> $snapDir)"
+        }
     } catch {
         Log "[!] MG snapshot error: $_"
     }
