@@ -197,7 +197,11 @@ if (-not (Test-GoldenValid $Golden)) {
     if ($src) {
         New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
         Copy-Item -LiteralPath $src.path $Golden -Force
-        Log "golden healed from $($src.path)"
+        if ($src.path -eq $SettingsXml) {
+            Log "[!] golden healed from LIVE settings.xml - verify it is what you want to protect"
+        } else {
+            Log "golden healed from $($src.path)"
+        }
     } else {
         Log "[!] no valid golden source - exiting"
         exit 1
@@ -205,7 +209,8 @@ if (-not (Test-GoldenValid $Golden)) {
 }
 
 # ---------------- state machine (persistent) ----------------
-$state = @{ schema = 2; phase = 'Idle'; gamePid = $null; sessionStart = $null; guardRollbacks = 0; restarts = 0 }
+$state = @{ schema = 2; phase = 'Idle'; gamePid = $null; sessionStart = $null; guardRollbacks = 0; restarts = 0
+            applied = $false; lastApplyUtc = $null }   # additive fields, schema stays 2
 $stateFile = $StateFile
 try {
     if (Test-Path -LiteralPath $stateFile) {
@@ -214,7 +219,8 @@ try {
             # schema 1 had sessionReapplied - deliberately dropped: it silently killed adopt
             $state = @{ schema = 2; phase = $loaded.phase; gamePid = $loaded.gamePid
                         sessionStart = $loaded.sessionStart; guardRollbacks = [int]$loaded.guardRollbacks
-                        restarts = [int]$loaded.restarts }
+                        restarts = [int]$loaded.restarts
+                        applied = [bool]$loaded.applied; lastApplyUtc = $loaded.lastApplyUtc }
         }
     }
 } catch {}
@@ -256,9 +262,16 @@ $errStreak = 0
 $lastErrAt = Get-Date
 $lastGuardReapply = [datetime]::MinValue
 $lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
+$appliedThisSession = $false           # did WE successfully apply golden in THIS session?
 $script:restartPending = $false
 $sessionStart = $null
 if ($state.sessionStart) { try { $sessionStart = [datetime]$state.sessionStart } catch { $sessionStart = $null } }
+if ($wasRunning) {
+    # takeover after a mid-session restart: restore the adopt evidence too,
+    # otherwise the exit branch would see MinValue and could adopt foreign writes
+    $appliedThisSession = [bool]$state.applied
+    if ($state.lastApplyUtc) { try { $lastApplyUtc = [datetime]$state.lastApplyUtc } catch {} }
+}
 
 while ($true) {
     Start-Sleep -Seconds 5
@@ -297,15 +310,20 @@ while ($true) {
             Ensure-BinsRestored -Cfg $cfg | Out-Null
             $sessionStart = Get-Date
             $lastGuardReapply = [datetime]::MinValue
+            $appliedThisSession = $false
+            $lastApplyUtc = [datetime]::MinValue
             if (Apply-Golden -Cfg $cfg) {
                 Log "GTA5 launched -> settings applied"
                 $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                $appliedThisSession = $true
             }
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             $state.phase = 'InGame'
             $state.gamePid = (@(Find-MatchingProcess -Patterns $cfg.gameProcesses) | Select-Object -First 1).Id
             $state.sessionStart = $sessionStart.ToString('o')
             $state.guardRollbacks = 0
+            $state.applied = $appliedThisSession
+            $state.lastApplyUtc = $lastApplyUtc.ToString('o')
             Save-State $state
             Start-Sleep -Seconds 3
             # one safety re-apply if overwritten right after launch ($null = unreadable -> skip)
@@ -313,6 +331,9 @@ while ($true) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "settings re-applied (was overwritten after launch)"
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                    $appliedThisSession = $true
+                    $state.applied = $true; $state.lastApplyUtc = $lastApplyUtc.ToString('o')
+                    Save-State $state
                 }
             }
         }
@@ -321,7 +342,7 @@ while ($true) {
             $adopted = $false
             $same = Test-SameSettings $cfg.settingsXml $Golden          # $true / $false / $null
             $changedAfterUs = ((Get-FileMtimeUtc $cfg.settingsXml) -gt $lastApplyUtc.AddSeconds(2))
-            if ((Test-AdoptCandidate $changedAfterUs ($onExit -eq 'adopt') $same) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
+            if ((Test-AdoptCandidate $changedAfterUs ($onExit -eq 'adopt') $same $appliedThisSession) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
                 # adopt: the user's in-game changes become the new golden
                 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
                 Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
@@ -331,6 +352,7 @@ while ($true) {
             }
             elseif ($null -eq $same) { Log "[i] exit: settings.xml unreadable - golden kept, adopt skipped" }
             elseif ($same) { Log "GTA5 closed -> settings unchanged, golden kept" }
+            elseif (-not $appliedThisSession) { Log "GTA5 closed -> golden never applied this session - adopt skipped (foreign overwrite?)" }
             elseif (-not $changedAfterUs) { Log "GTA5 closed -> nobody wrote after our apply - golden kept" }
             else { Log "GTA5 closed -> onExit=$onExit - user changes not adopted" }
             if (-not $adopted -and ($same -eq $false)) {
@@ -344,6 +366,8 @@ while ($true) {
             $state.gamePid = $null
             $state.sessionStart = $null
             $state.guardRollbacks = 0
+            $state.applied = $false
+            $state.lastApplyUtc = $null
             Save-State $state
             $sessionStart = $null
             # deferred self-restart: safe now that the game is closed
@@ -370,6 +394,9 @@ while ($true) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "session guard: foreign overwrite in launch window - golden re-applied"
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                    $appliedThisSession = $true
+                    $state.applied = $true
+                    $state.lastApplyUtc = $lastApplyUtc.ToString('o')
                     $state.guardRollbacks = [int]$state.guardRollbacks + 1
                     Save-State $state
                 }
