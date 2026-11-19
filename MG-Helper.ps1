@@ -60,7 +60,7 @@ function Show-Menu {
     $cfg = Resolve-MgPaths -NoSave
     $installed = Test-Path (Join-Path $HelperDir 'gta-settings-watcher.ps1')
     $watchAlive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-        Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' }).Count -gt 0
+        Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.CommandLine -notmatch '-Diagnose' }).Count -gt 0
     $mgOk = $cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $cfg.miamiGraphicsDir)
     $sxOk = $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)
 
