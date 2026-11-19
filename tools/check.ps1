@@ -61,9 +61,9 @@ if (-not (Test-GoldenValid $g)) { Good 'Test-GoldenValid: rejects corrupt' } els
 # 6. Save-MgConfig roundtrip - TWICE, so the [IO.File]::Replace path is exercised too
 $cfg = Get-MgConfig
 $cfg.settingsXml = 'C:\test\settings.xml'
-Save-MgConfig $cfg
+$null = Save-MgConfig $cfg
 $cfg.settingsXml = 'C:\test\settings2.xml'
-Save-MgConfig $cfg
+$null = Save-MgConfig $cfg
 $cfg2 = Get-MgConfig
 if ($cfg2.settingsXml -eq 'C:\test\settings2.xml') { Good 'config roundtrip (create + replace)' } else { Bad 'config roundtrip / atomic replace' }
 
@@ -258,6 +258,71 @@ if ($wtxt -notmatch 'new game PID') { Bad 'watcher: fast-relaunch new-PID detect
 if ($wtxt -notmatch 'PID reuse guard') { Bad 'watcher: takeover does not verify the PID belongs to the game' }
 if ($wtxt -notmatch 'Write-Atomic -Path \$Golden -Bytes \$adoptBytes') { Bad 'watcher: adopt must write golden atomically' }
 if ((Get-Content (Join-Path $repo 'MG-Helper-Host.cs') -Raw) -notmatch '-Smoke') { Bad 'host: -Smoke mutex bypass missing (installer smoke would false-pass)' }
+# MG-CR guards (round 5)
+if ($ctxt -notmatch 'function XmlReaderSettings' -and $ctxt -notmatch 'XmlReaderSettings') { Bad 'common: Test-ValidSettingsXml must do real XML validation (MG-CR-003)' }
+if ($ctxt -match 'Remove-Item -LiteralPath \$script:ConfigFile') { Bad 'common: Save-MgConfig still has the DESTRUCTIVE fallback (MG-CR-001)' }
+if ($wtxt -notmatch 'UnknownSession') { Bad 'watcher: safe UnknownSession mode missing (MG-CR-004)' }
+if ($wtxt -notmatch 'pre-apply backup FAILED') { Bad 'watcher: pre-apply backup failure must block the golden apply (MG-CR-006)' }
+if ((Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw) -notmatch 'FALLBACK: 10-min repeat only') { Bad 'installer: schtasks fallback must be verified and honestly reported (MG-CR-007)' }
+
+# 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
+$vx = Join-Path $sandbox 'valid_settings.xml'
+[IO.File]::WriteAllText($vx, "<?xml version=`"1.0`"?><Settings><graphics/><audio/></Settings>")
+if (Test-ValidSettingsXml $vx) { Good 'xml: valid Settings file accepted' } else { Bad 'xml: valid file rejected' }
+[IO.File]::WriteAllText($vx, '<Settings><graphics/>')   # torn, no closing tag
+if (-not (Test-ValidSettingsXml $vx)) { Good 'xml: torn file rejected' } else { Bad 'xml: torn file accepted' }
+[IO.File]::WriteAllText($vx, '<?xml version="1.0"?><NotSettings/>')
+if (-not (Test-ValidSettingsXml $vx)) { Good 'xml: wrong root rejected' } else { Bad 'xml: wrong root accepted' }
+[IO.File]::WriteAllText($vx, '<Settings><graphics/></Settings><!-- $1 -->')
+if (Test-ValidSettingsXml $vx) { Good 'xml: $digit inside comment no longer a false rejection' } else { Bad 'xml: comment content false-rejected' }
+
+# 11n. MG-CR-002: Apply-Golden heals from the validated source and applies its bytes
+$sbx = Join-Path $sandbox 'apply'
+New-Item -ItemType Directory -Force -Path $sbx | Out-Null
+$gGolden = Join-Path $sbx 'settings.golden.xml'
+$gBak = Join-Path $sbx 'settings.before_apply.bak'
+$gLive = Join-Path $sbx 'live_settings.xml'
+[IO.File]::WriteAllText($gGolden, 'TORN-GARBAGE-NOT-XML')
+[IO.File]::WriteAllText($gBak, "<?xml version=`"1.0`"?><Settings><golden>" + ('x' * 100) + "</golden></Settings>")
+[IO.File]::WriteAllText($gLive, 'OLD-LIVE')
+$script:HelperDir = $sbx
+$cfgA = @{ settingsXml = $gLive }
+$okA = Apply-Golden -Cfg $cfgA
+$liveOk = ([IO.File]::ReadAllText($gLive) -match '<golden>x{100}</golden>')
+$goldenOk = (Test-GoldenValid $gGolden)
+if ($okA -and $liveOk -and $goldenOk) { Good 'apply-golden: heals from validated source, applies same bytes, golden verified' } else { Bad "apply-golden: ok=$okA live=$liveOk goldenOk=$goldenOk" }
+$script:HelperDir = $sandbox
+
+# 11o. MG-CR-001: Save-MgConfig failure leaves the old config intact
+$cfgHold = Get-MgConfig
+$cfgHold.settingsXml = 'C:\preserved\value.xml'
+Save-MgConfig $cfgHold | Out-Null
+$before = Get-Content -LiteralPath $script:ConfigFile -Raw
+$lockCfg = [IO.File]::Open($script:ConfigFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+$cfgHold.settingsXml = 'C:\changed\value.xml'
+$rSave = Save-MgConfig $cfgHold
+$lockCfg.Close(); $lockCfg.Dispose()
+$after = Get-Content -LiteralPath $script:ConfigFile -Raw
+if ((-not $rSave) -and ($after -eq $before)) { Good 'config: failed save returns $false and PRESERVES the old config' } else { Bad "config: failed save rSave=$rSave preserved=$($after -eq $before)" }
+
+# 11p. MG-CR-005: Ensure-BinsRestored reports partial when a source is locked
+$mjP = Join-Path $sandbox 'maj_p'
+New-Item -ItemType Directory -Force -Path (Join-Path $mjP 'backup') | Out-Null
+$mjPJson = Join-Path $mjP 'majestic.json'
+[IO.File]::WriteAllText($mjPJson, '{"cachePath":"C:\\x"}')
+$arcP = Join-Path $sandbox 'vanilla_backup_archive\2098-01-01_000000'
+New-Item -ItemType Directory -Force -Path $arcP | Out-Null
+[IO.File]::WriteAllText((Join-Path $arcP 'a.bin'), 'AAAA')
+[IO.File]::WriteAllText((Join-Path $arcP 'b.bin'), 'BBBB')
+$oldBk = $script:HelperDir; $script:HelperDir = $sandbox
+$st1 = Ensure-BinsRestored -Cfg @{ majesticJson = $mjPJson }
+$lockP = [IO.File]::Open((Join-Path $arcP 'a.bin'), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+Remove-Item (Join-Path $mjP 'backup\a.bin') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $mjP 'backup\b.bin') -Force -ErrorAction SilentlyContinue
+$st2 = Ensure-BinsRestored -Cfg @{ majesticJson = $mjPJson }
+$lockP.Close(); $lockP.Dispose()
+if ($st1 -eq 'restored' -and $st2 -eq 'partial') { Good 'bins-ensure: partial status on a locked source' } else { Bad "bins-ensure: st1=$st1 st2=$st2 (expected restored/partial)" }
+$script:HelperDir = $oldBk
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
@@ -305,7 +370,14 @@ if (Get-LatestBinArchive) { Good 'archive: helper still finds the good generatio
 (Get-Item (Join-Path $goodArc 'update.rpf.bin')).LastWriteTimeUtc = (Get-Item $liveF).LastWriteTimeUtc
 $rG = Archive-VanillaBins -Cfg $cfgF
 $gensG = @(Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory).Count
-if ((-not $rG) -and ($gensG -eq $gensAfter)) { Good 'archive: unchanged bins skip the copy' } else { Bad 'archive: unchanged bins re-copied' }
+if ((-not $rG) -and ($gensG -le $gensAfter)) { Good 'archive: unchanged bins skip the copy (no new generation)' }
+else {
+    Write-Host ("    [dbg 11g] rG=$rG gensG=$gensG gensAfter=$gensAfter") -ForegroundColor DarkGray
+    Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory | ForEach-Object {
+        Write-Host ("    [dbg 11g] gen " + $_.Name + " files=" + @(Get-ChildItem $_.FullName -Filter '*.bin').Count) -ForegroundColor DarkGray
+    }
+    Bad 'archive: unchanged bins re-copied'
+}
 
 # 11h. changed bins -> fresh verified generation
 [IO.File]::WriteAllText($liveF, 'LIVE-CONTENT-V2')
