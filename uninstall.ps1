@@ -32,4 +32,3 @@ if (Test-Path -LiteralPath $common) {
 
 Write-Host '[+] Watcher остановлен, автозапуск удалён.' -ForegroundColor Green
 Write-Host "    Бэкапы и эталон сохранены в $env:LOCALAPPDATA\MG_Helper"
-pause
