@@ -58,6 +58,9 @@ $values = [ordered]@{
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 Copy-Item $Golden (Join-Path $HelperDir "settings.golden.xml.before_shadows_$stamp") -Force
 Copy-Item $Settings (Join-Path $HelperDir "settings.xml.before_shadows_$stamp") -Force
+if (Get-Command Prune-BackupFiles -ErrorAction SilentlyContinue) {
+    Prune-BackupFiles -Pattern 'settings.*before_shadows_*'   # keep the newest 10, prune the rest
+}
 
 # phase 1: merge + validate BOTH files before touching anything
 $merged = @{}
