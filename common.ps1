@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.1'   # держать в синке с version.json
+$script:Version = '1.6.2'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -72,7 +72,7 @@ function Save-MgConfig {
         $json = $Config | ConvertTo-Json -Depth 4
         $tmp = "$script:ConfigFile.tmp"
         [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
-        if (Test-Path -LiteralPath $script:ConfigFile) { [IO.File]::Replace($tmp, $script:ConfigFile, $null) }
+        if (Test-Path -LiteralPath $script:ConfigFile) { [IO.File]::Replace($tmp, $script:ConfigFile, [NullString]::Value) }
         else { Move-Item -LiteralPath $tmp $script:ConfigFile -Force }
     } catch {
         try {
@@ -389,7 +389,7 @@ function Write-Atomic {
                 if ($item -and $item.IsReadOnly) {
                     Set-ItemProperty -LiteralPath $Path -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                 }
-                [IO.File]::Replace($tmp, $Path, $null)
+                [IO.File]::Replace($tmp, $Path, [NullString]::Value)
             } else {
                 Move-Item -LiteralPath $tmp $Path -Force
             }
