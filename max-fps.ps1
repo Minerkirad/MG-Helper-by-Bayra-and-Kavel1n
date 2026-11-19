@@ -109,7 +109,9 @@ foreach ($file in @($Golden, $Settings)) {
     $n = 0
     foreach ($k in $values.Keys) {
         $pattern = "(?<=<$k value=`")[^`"]*(?=`")"
-        if ($s -match $pattern) { $s = [regex]::Replace($s, $pattern, $values[$k]); $n++ }
+        # case-insensitive replace; counter counts REAL changes ('-match' is ci, [regex]::Replace was cs)
+        $new2 = [regex]::Replace($s, $pattern, $values[$k], [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($new2 -ne $s) { $s = $new2; $n++ }
     }
     if ($s -match '\$\d') {
         Write-Host "[!] corrupt merge - aborted, nothing changed" -ForegroundColor Red
@@ -126,7 +128,7 @@ foreach ($file in @($Golden, $Settings)) {
             exit 1
         }
     } else {
-        [IO.File]::WriteAllText($file, $bytes, [Text.UTF8Encoding]::new($true))  # fallback: no common.ps1
+        [IO.File]::WriteAllBytes($file, $bytes)   # byte[] -> WriteAllBytes, NOT WriteAllText (byte[] -> decimal-garbage string)
     }
 }
 
