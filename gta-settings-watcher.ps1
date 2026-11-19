@@ -216,11 +216,24 @@ if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 
 }
 
 # unclean-shutdown detection: archived bins exist + nothing running
-if ((Ensure-BinsRestored -Cfg $cfg) -eq 'restored') {
+$binsStatus = Ensure-BinsRestored -Cfg $cfg
+if ($binsStatus -eq 'restored') {
     Log "[i] vanilla bins restored from archive (unclean previous session)"
+}
+elseif ($binsStatus -eq 'partial') {
+    Log "[!] vanilla bins restored PARTIALLY - next tick continues; launcher patch may need a retry"
+}
+elseif ($binsStatus -eq 'failed') {
+    Log "[!] vanilla bins could NOT be restored - Majestic may hit error 1002 this launch"
 }
 
 Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
+
+# MG-CR-004: trust the state only if it is schema 2 with a known phase
+$stateTrusted = $false
+try {
+    if ($state.schema -eq 2 -and $state.phase -in @('Idle', 'InGame')) { $stateTrusted = $true }
+} catch { $stateTrusted = $false }
 
 $wasRunning = $false
 if ($state.phase -eq 'InGame') {
@@ -230,6 +243,20 @@ if ($state.phase -eq 'InGame') {
     if ($gp -and ($gp.Name -like 'GTA5*' -or $gp.Name -like '*gtav*')) {
         $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))"
     } else { $state.phase = 'Idle' }
+}
+if (-not $wasRunning) {
+    # game ALREADY running at watcher start: without a trusted InGame state we
+    # must NOT apply the golden (would stomp the user's mid-game changes) and
+    # must NOT adopt on exit (the file may contain launcher overwrites).
+    # UnknownSession: observe only, wait for the game to close, then reset.
+    $gameAlreadyRunning = @(Find-MatchingProcess -Patterns $cfg.gameProcesses).Count -gt 0
+    if ($gameAlreadyRunning) {
+        $state.phase = 'UnknownSession'
+        $state.gamePid = $null
+        $wasRunning = $true
+        Save-State $state
+        Log '[!] game already running and state is not trusted - SAFE MODE (no golden apply, no adopt) until the game closes'
+    }
 }
 $lastBeat = Get-Date
 $script:wasLauncher = $false
@@ -278,7 +305,9 @@ while ($true) {
         # 1002 insurance: bins must be vanilla BEFORE the launcher patches the game
         if ($launcher -and -not $script:wasLauncher) {
             Log "Majestic launcher started"
-            if ((Ensure-BinsRestored -Cfg $cfg) -eq 'restored') { Log "vanilla bins restored before launcher patch" }
+            $bs = Ensure-BinsRestored -Cfg $cfg
+            if ($bs -eq 'restored') { Log "vanilla bins restored before launcher patch" }
+            elseif ($bs -in @('partial', 'failed')) { Log "[!] vanilla bins $bs before launcher patch - error 1002 risk this launch" }
         }
         $script:wasLauncher = $launcher
 
@@ -291,13 +320,19 @@ while ($true) {
                 Set-ItemProperty -LiteralPath $cfg.settingsXml -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
                 Log "settings.xml was read-only - attribute cleared"
             }
-            Copy-Item -LiteralPath $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force -ErrorAction SilentlyContinue
+            # MG-CR-006: the pre-apply backup is CRITICAL - without it the user's
+            # current settings could not be recovered if the golden were wrong.
+            $preBackupOk = $false
+            try {
+                Copy-Item -LiteralPath $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force -ErrorAction Stop
+                $preBackupOk = $true
+            } catch { Log "[!] pre-apply backup FAILED: $_ - golden will NOT be applied (nothing overwritten)" }
             Ensure-BinsRestored -Cfg $cfg | Out-Null
             $sessionStart = Get-Date
             $lastGuardReapply = [datetime]::MinValue
             $appliedThisSession = $false
             $lastApplyUtc = [datetime]::MinValue
-            if (Apply-Golden -Cfg $cfg) {
+            if ($preBackupOk -and (Apply-Golden -Cfg $cfg)) {
                 Log "GTA5 launched -> settings applied"
                 $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                 $appliedThisSession = $true
@@ -324,6 +359,21 @@ while ($true) {
         }
         elseif (-not $running -and $wasRunning) {
             Start-Sleep -Seconds 3
+            if ($state.phase -eq 'UnknownSession') {
+                # MG-CR-004: safe mode - no adopt, no restore, no golden writes.
+                # The game that started before us is done; reset and observe fresh.
+                Log "[i] unknown session ended - safe re-init (nothing was written)"
+                Restore-VanillaBackup -Cfg $cfg | Out-Null
+                $state.phase = 'Idle'
+                $state.gamePid = $null
+                $state.sessionStart = $null
+                $state.guardRollbacks = 0
+                $state.applied = $false
+                $state.lastApplyUtc = $null
+                Save-State $state
+                $sessionStart = $null
+            }
+            else {
             $adopted = $false
             $same = Test-SameSettings $cfg.settingsXml $Golden          # $true / $false / $null
             $changedAfterUs = ((Get-FileMtimeUtc $cfg.settingsXml) -gt $lastApplyUtc.AddSeconds(2))
@@ -351,18 +401,22 @@ while ($true) {
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                 }
             }
+            }
+            # shared exit tail: bins bookkeeping is safe in both modes
             Restore-VanillaBackup -Cfg $cfg | Out-Null
             # build the 1002 insurance: copy (never move) launcher bins to the
             # archive now that the game is closed - safe from the patcher race
             if (Archive-VanillaBins -Cfg $cfg) { Log "vanilla bins archived (copy, insurance against error 1002)" }
             Prune-BackupFiles -Pattern 'settings.golden.xml.old_*'
-            $state.phase = 'Idle'
-            $state.gamePid = $null
-            $state.sessionStart = $null
-            $state.guardRollbacks = 0
-            $state.applied = $false
-            $state.lastApplyUtc = $null
-            Save-State $state
+            if ($state.phase -ne 'UnknownSession') {
+                $state.phase = 'Idle'
+                $state.gamePid = $null
+                $state.sessionStart = $null
+                $state.guardRollbacks = 0
+                $state.applied = $false
+                $state.lastApplyUtc = $null
+                Save-State $state
+            }
             $sessionStart = $null
             # deferred self-restart: safe now that the game is closed
             if ($script:restartPending) {
