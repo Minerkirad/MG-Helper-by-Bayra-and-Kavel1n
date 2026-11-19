@@ -55,7 +55,7 @@ if ($cfg0.settingsXml -and (Test-Path -LiteralPath $cfg0.settingsXml)) {
 $installer = Join-Path $root 'install-gta-watcher.ps1'
 if (-not (Test-Path -LiteralPath $installer)) {
     Write-Host "[!] install-gta-watcher.ps1 не найден в папке пакета - переустанови пакет целиком." -ForegroundColor Red
-    pause; exit 1
+    exit 1
 }
 '' | powershell -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1 | ForEach-Object { Write-Host "  $_" }
 
