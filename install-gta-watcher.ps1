@@ -106,8 +106,11 @@ Write-Host "[i] config.json written (discovered paths are cached there)." -Foreg
 # 5. autostart: one scheduled task (logon + 10-min repeat), mutex-protected
 # ------------------------------------------------------------
 $watcherDst = Join-Path $HelperDir 'gta-settings-watcher.ps1'
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' } |
+# cooperative stop, then precise kill - never touches this installer or the menu
+try { [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop').Set() | Out-Null } catch {}
+Start-Sleep -Seconds 2
+Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
+    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # migration: remove old mechanisms
@@ -139,7 +142,7 @@ Start-Sleep 4
 $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
     Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID })
 if ($alive.Count -gt 0) {
-    Write-Host "[+] Watcher v6 is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
+    Write-Host "[+] Watcher v1.6.2 is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } else {
