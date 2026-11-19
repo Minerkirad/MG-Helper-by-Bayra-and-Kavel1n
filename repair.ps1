@@ -35,11 +35,32 @@ foreach ($c in $chain) {
     } catch {}
 }
 if ($gSrc -and ($gSrc -ne $Golden)) {
+    # MG-CR-010: healing from the LIVE settings.xml may replace the golden the
+    # user actually wanted - confirm before writing
+    if ($gSrc -eq $cfg0.settingsXml) {
+        Write-Host ""
+        Write-Host "[?] Надёжная копия эталона не найдена. Восстановить эталон из ТЕКУЩИХ настроек GTA V?" -ForegroundColor Yellow
+        Write-Host "    Это может заменить ранее сохранённую конфигурацию текущими настройками игры." -ForegroundColor Yellow
+        $rLive = Read-Host "Восстановить эталон из текущих настроек? (да/нет)"
+        if ($rLive -notmatch '^(д|да|y|yes)$') {
+            $results += @{ ok = $false; msg = "Эталон НЕ восстановлен из LIVE-настроек (отменено пользователем) - используйте [2] Reset settings" }
+            $gSrc = $null
+        }
+    }
+}
+if ($gSrc -and ($gSrc -ne $Golden)) {
     New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
-    Copy-Item $gSrc $Golden -Force
-    $msg = "Эталон восстановлен из $((Split-Path $gSrc -Leaf))"
-    if ($gSrc -eq $cfg0.settingsXml) { $msg += " (LIVE settings - проверьте, что это нужный файл!)" }
-    $results += @{ ok = $true;  msg = $msg }
+    $healBytes = [IO.File]::ReadAllBytes($gSrc)
+    $healOk = $false
+    if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) { $healOk = Write-Atomic -Path $Golden -Bytes $healBytes }
+    else { try { [IO.File]::WriteAllBytes($Golden, $healBytes); $healOk = $true } catch { $healOk = $false } }
+    if ($healOk -and (Test-GoldenValid $Golden)) {
+        $msg = "Эталон восстановлен из $((Split-Path $gSrc -Leaf))"
+        if ($gSrc -eq $cfg0.settingsXml) { $msg += " (LIVE settings - проверьте, что это нужный файл!)" }
+        $results += @{ ok = $true;  msg = $msg }
+    } else {
+        $results += @{ ok = $false; msg = "Не удалось записать восстановленный эталон (файл заблокирован?)" }
+    }
 }
 elseif ($gSrc) { $results += @{ ok = $true;  msg = "Эталон валиден - восстановление не потребовалось" } }
 else {              $results += @{ ok = $false; msg = "Ни одного валидного источника эталона не найдено" } }
