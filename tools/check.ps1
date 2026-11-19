@@ -35,7 +35,7 @@ foreach ($fn in 'Get-MgConfig','Save-MgConfig','Resolve-MgPaths','Find-MatchingP
                 'Test-GoldenValid','Get-ValidGolden','Apply-Golden','Get-MajesticBackupDir',
                 'Ensure-BinsRestored','Restore-VanillaBackup','Get-PkgVersion',
                 'Get-ExeNamesFromCommandLine','Get-CachedWalk','Archive-VanillaBins','Prune-BackupFiles',
-                'Get-LatestBinArchive') {
+                'Get-LatestBinArchive','Snapshot-MgFiles') {
     if (-not (Get-Command $fn -ErrorAction SilentlyContinue)) { Bad "missing function $fn" }
 }
 
@@ -150,6 +150,29 @@ if (-not (Test-AdoptCandidate $false $true $false $true)) { Good 'adopt: no writ
 if (-not (Test-AdoptCandidate $true $false $false $true)) { Good 'adopt: onExit=restore respected' } else { Bad 'adopt: onExit ignored' }
 if (-not (Test-AdoptCandidate $true $true $false $false)) { Good 'adopt: never-applied session cannot adopt (poisoning regression)' } else { Bad 'adopt: foreign overwrite adopted without our apply' }
 
+# 11k. Snapshot-MgFiles round-trip: '__' inside the MG path must resolve exactly,
+#      and a legacy-name leftover with the same prefix must be swept
+$mgWeird = Join-Path $sandbox 'MG__weird'
+New-Item -ItemType Directory -Force -Path (Join-Path $mgWeird 'sub__dir') | Out-Null
+[IO.File]::WriteAllText((Join-Path $mgWeird 'config__gpu.json'), '{"gpu":1}')
+[IO.File]::WriteAllText((Join-Path $mgWeird 'sub__dir\opts.json'), '{"o":1}')
+$legacyName = (($mgWeird -replace '[:\\/]', '_')) + '__config__gpu.json'   # ambiguous legacy snapshot name
+New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'mg_snapshot') | Out-Null
+[IO.File]::WriteAllText((Join-Path $sandbox "mg_snapshot\$legacyName"), 'LEGACY-LEFTOVER')
+$logged = @()
+Snapshot-MgFiles -Cfg @{ miamiGraphicsDir = $mgWeird } -Logger { param($m) $script:logged += $m } -NoStandardScan
+$maniPath = Join-Path $sandbox 'mg_snapshot\manifest.json'
+if (Test-Path -LiteralPath $maniPath) {
+    $mani = Get-Content -LiteralPath $maniPath -Raw | ConvertFrom-Json
+    $okRT = @($mani.PSObject.Properties).Count -ge 2
+    foreach ($p in $mani.PSObject.Properties) {
+        if (-not (Test-Path -LiteralPath (Join-Path $mgWeird $p.Value))) { $okRT = $false }
+    }
+    if ($okRT -and -not (Test-Path -LiteralPath (Join-Path $sandbox "mg_snapshot\$legacyName"))) {
+        Good 'snapshot: round-trip paths resolve exactly, legacy leftover swept'
+    } else { Bad 'snapshot: round-trip broken or legacy file resurrects' }
+} else { Bad 'snapshot: manifest.json not written' }
+
 # 11b. exe-token matching: document paths must not look like the game
 $n1 = Get-ExeNamesFromCommandLine 'notepad "C:\Games\GTA5\settings.xml"'
 if ($n1 -notcontains 'GTA5') { Good 'exe-match: document path is not the game' } else { Bad 'exe-match: document path looks like GTA5' }
@@ -216,9 +239,13 @@ if ($wtxt -notmatch 'Archive-VanillaBins') { Bad 'watcher: vanilla bin archive i
 $restTxt = Get-Content (Join-Path $repo 'restore-mg-snapshot.ps1') -Raw
 if ($restTxt -notmatch 'mapping\.ContainsKey\(\$_\.Name\)') { Bad 'restore: manifest must filter unmapped (legacy/stale) files' }
 if ($restTxt -notmatch '\^f\\d\+\\\.json\$') { Bad 'restore: new-format fallback must return null, not fN.json' }
-if ($wtxt -notmatch 'rootPrefixes') { Bad 'watcher: stale snapshot sweep missing' }
+if ($wtxt -match 'function Snapshot-MgFiles') { Bad 'watcher: must use common.ps1 Snapshot-MgFiles (round-trip testable), not a local copy' }
+if ($ctxt -notmatch 'rootPrefixes') { Bad 'common: stale snapshot sweep missing' }
 if ($ctxt -notmatch 'function Get-LatestBinArchive') { Bad 'common: Get-LatestBinArchive missing' }
 if ($ctxt -match 'Select-Object -First 1[\s\S]{0,200}vanilla_backup_archive') { Bad 'common: latest-only bin archive selection is back' }
+if ($ctxt -notmatch '\^\(powershell\|pwsh\|explorer\)') { Bad 'common: explorer process is not excluded from game matching' }
+if ($ctxt -match 'TotalSeconds -lt 60') { Bad 'common: CIM cache TTL must be 20 s (60 s lagged renamed-exe detection)' }
+if ($wtxt -match 'function Snapshot-MgFiles') { Bad 'watcher: must use common.ps1 Snapshot-MgFiles (round-trip testable), not a local copy' }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
