@@ -42,11 +42,14 @@ $header + "`r`n" + (($rep | ForEach-Object { $_.ToString() }) -join "`r`n") |
 
 # enrich the report: config, longer log, snapshot list, archive listing, versions
 $extra = @()
+$diskLines = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue |
+    ForEach-Object { "Диск $($_.DeviceID) свободно: $([int]($_.FreeSpace / 1GB)) ГБ" })
+if ($diskLines.Count -eq 0) { $diskLines = @("Диск C свободно: $([int]((Get-PSDrive C -ErrorAction SilentlyContinue).Free / 1GB)) ГБ") }
 $extra += ""
 $extra += "=== ОКРУЖЕНИЕ ==="
 $extra += "OS:     $([Environment]::OSVersion.VersionString)"
 $extra += "PS:     $($PSVersionTable.PSVersion)"
-$extra += "Диск C свободно: $([int]((Get-PSDrive C -ErrorAction SilentlyContinue).Free / 1GB)) ГБ"
+$extra += $diskLines
 $extra += ""
 $extra += "=== CONFIG.JSON ==="
 $extra += (Get-Content (Join-Path $watcherDir 'config.json') -Raw -ErrorAction SilentlyContinue)
