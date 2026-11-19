@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.6.5'   # держать в синке с version.json
+$script:Version = '1.6.6'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -40,13 +40,10 @@ function Get-MgConfig {
         gameProcesses     = @('GTA5', 'GTA5_Enhanced')
         launcherProcesses = @('Majestic', 'MajesticLauncher', 'majestic-launcher')
         mgProcesses       = @('Miami', 'MiamiGraphics')
-        useHotswapAgent   = $false
-        autoArchiveBins   = $false
         autoCleanDlccache = $false
         onExit            = 'adopt'
         sessionGuard      = $true
         guardWindowSec    = 120
-        notifications     = $true
         docsRoot          = (Get-DocsPin)
     }
     if (Test-Path -LiteralPath $script:ConfigFile) {
@@ -562,6 +559,44 @@ function Restore-VanillaBackup {
     } catch { return $false }
 }
 
+function Archive-VanillaBins {
+    # builds the vanilla_backup_archive: copies (NEVER moves - no race with the
+    # Majestic patcher, that race caused error 1002) the launcher's vanilla bins
+    # right after the game closes. This is what makes Ensure-BinsRestored /
+    # Restore-VanillaBackup actually work as 1002 insurance. Keeps $Keep newest
+    # generations (each ~2 GB of local disk, zero network traffic).
+    param($Cfg, [int]$Keep = 2)
+    try {
+        $bkDir = Get-MajesticBackupDir -Cfg $Cfg
+        if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return $false }
+        $bins = @(Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue)
+        if ($bins.Count -eq 0) { return $false }
+        $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
+        $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+        $dst = Join-Path $arcRoot $stamp
+        New-Item -ItemType Directory -Force -Path $dst | Out-Null
+        foreach ($b in $bins) { Copy-Item -LiteralPath $b.FullName -Destination $dst -Force -ErrorAction SilentlyContinue }
+        # retention: keep only the newest generations
+        Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Select-Object -Skip $Keep |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch { return $false }
+}
+
+function Prune-BackupFiles {
+    # keeps only the newest $Keep timestamped backups matching a pattern
+    # (settings.golden.xml.old_*, before_maxfps_*, before_shadows_* grow forever)
+    param([string]$Pattern, [int]$Keep = 10)
+    try {
+        Get-ChildItem -LiteralPath $script:HelperDir -Filter $Pattern -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -Skip $Keep |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    } catch {}
+}
+
 # ------------------------------------------------------------
 # Documents location pin: detect if the shell folder was MOVED
 # (breaks the Rockstar Games SDK -> error 1002 "incomplete install")
@@ -572,12 +607,4 @@ function Get-DocsPin {
         $raw = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name Personal -ErrorAction Stop).Personal
         return [Environment]::ExpandEnvironmentVariables($raw)
     } catch { return $null }
-}
-
-function Test-DocsRootChanged {
-    # returns $true if the Documents location CHANGED from what config.json recorded
-    param([string]$ConfiguredDocsRoot)
-    $cur = Get-DocsPin
-    if (-not $cur -or -not $ConfiguredDocsRoot) { return $false }
-    return ($cur.TrimEnd('\') -ne $ConfiguredDocsRoot.TrimEnd('\'))
 }
