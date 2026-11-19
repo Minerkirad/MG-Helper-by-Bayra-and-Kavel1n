@@ -1,4 +1,4 @@
-﻿# MG Helper uninstall v1.6.1 - by Bayra & Kavel1n
+﻿# MG Helper uninstall - by Bayra & Kavel1n
 # Останавливает watcher кооперативно, удаляет задачу автозапуска и legacy Run-ключ,
 # возвращает ванильные .bin лаунчеру. Бэкапы и эталон сохраняет.
 $ErrorActionPreference = 'Continue'
@@ -25,7 +25,7 @@ Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 
 # 4. restore vanilla bins so Majestic does not hit error 1002
 if (Test-Path -LiteralPath $common) {
     $cfg = Get-MgConfig
-    if (Ensure-BinsRestored -Cfg $cfg) {
+    if ((Ensure-BinsRestored -Cfg $cfg) -eq 'restored') {
         Write-Host '[+] Ванильные .bin возвращены лаунчеру.' -ForegroundColor Green
     }
 }
