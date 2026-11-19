@@ -141,7 +141,7 @@ if ($hostExe) {
     try {
         $smokeScript = Join-Path $HelperDir 'host_smoke.ps1'
         Set-Content -LiteralPath $smokeScript -Value 'exit 0' -Encoding ASCII
-        $sp = Start-Process $hostExe -ArgumentList "`"$smokeScript`"" -PassThru -WindowStyle Hidden
+        $sp = Start-Process $hostExe -ArgumentList '-Smoke', "`"$smokeScript`"" -PassThru -WindowStyle Hidden
         if (-not $sp.WaitForExit(20000)) {
             try { $sp.Kill() } catch {}
             throw 'host smoke timeout (20 s)'
@@ -183,7 +183,10 @@ try {
     $regOk = ($LASTEXITCODE -eq 0)
 }
 if ($regOk) { Write-Host '[+] Watchdog task registered (logon + 10-min repeat).' -ForegroundColor Green }
-else { Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red }
+else {
+    Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red
+    exit 1
+}
 
 # ------------------------------------------------------------
 # 6. start watcher (via the task - no console flash, no focus steal)
@@ -191,12 +194,13 @@ else { Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red 
 Start-ScheduledTask -TaskName 'MG_Helper_Watcher'
 Start-Sleep 6
 $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID })
+    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch '-Diagnose' })
 if ($alive.Count -gt 0) {
     Write-Host "[+] Watcher v$(Get-PkgVersion) is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } else {
     Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [8] Diagnose." -ForegroundColor Red
+    exit 1
 }
 
