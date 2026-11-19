@@ -33,7 +33,8 @@ $script:ConfigFile = Join-Path $sandbox 'config.json'
 # 3. required functions present
 foreach ($fn in 'Get-MgConfig','Save-MgConfig','Resolve-MgPaths','Find-MatchingProcess','Write-Atomic',
                 'Test-GoldenValid','Get-ValidGolden','Apply-Golden','Get-MajesticBackupDir',
-                'Ensure-BinsRestored','Restore-VanillaBackup','Get-PkgVersion') {
+                'Ensure-BinsRestored','Restore-VanillaBackup','Get-PkgVersion',
+                'Get-ExeNamesFromCommandLine','Get-CachedWalk') {
     if (-not (Get-Command $fn -ErrorAction SilentlyContinue)) { Bad "missing function $fn" }
 }
 
@@ -141,17 +142,46 @@ if (Test-GuardActive $now 120 $true $true) { Good 'guard: active inside the laun
 if (-not (Test-GuardActive $now.AddSeconds(-600) 120 $true $true)) { Good 'guard: OFF after the window (user changes survive)' } else { Bad 'guard: still active after the window' }
 if (-not (Test-GuardActive $now 120 $false $true)) { Good 'guard: config kill-switch works' } else { Bad 'guard: kill-switch ignored' }
 if (-not (Test-GuardActive $null 120 $true $true)) { Good 'guard: no session -> inactive' } else { Bad 'guard: active without a session' }
-if (Test-AdoptCandidate $true $true $false) { Good 'adopt: user change after our apply is adopted' } else { Bad 'adopt: user change rejected' }
-if (-not (Test-AdoptCandidate $true $true $true)) { Good 'adopt: unchanged file is not adopted' } else { Bad 'adopt: unchanged file adopted' }
-if (-not (Test-AdoptCandidate $true $true $null)) { Good 'adopt: unreadable file is not adopted' } else { Bad 'adopt: unreadable file adopted' }
-if (-not (Test-AdoptCandidate $false $true $false)) { Good 'adopt: no write after our apply -> not adopted' } else { Bad 'adopt: adopted without a foreign write' }
-if (-not (Test-AdoptCandidate $true $false $false)) { Good 'adopt: onExit=restore respected' } else { Bad 'adopt: onExit ignored' }
+if (Test-AdoptCandidate $true $true $false $true) { Good 'adopt: user change after our apply is adopted' } else { Bad 'adopt: user change rejected' }
+if (-not (Test-AdoptCandidate $true $true $true $true)) { Good 'adopt: unchanged file is not adopted' } else { Bad 'adopt: unchanged file adopted' }
+if (-not (Test-AdoptCandidate $true $true $null $true)) { Good 'adopt: unreadable file is not adopted' } else { Bad 'adopt: unreadable file adopted' }
+if (-not (Test-AdoptCandidate $false $true $false $true)) { Good 'adopt: no write after our apply -> not adopted' } else { Bad 'adopt: adopted without a foreign write' }
+if (-not (Test-AdoptCandidate $true $false $false $true)) { Good 'adopt: onExit=restore respected' } else { Bad 'adopt: onExit ignored' }
+if (-not (Test-AdoptCandidate $true $true $false $false)) { Good 'adopt: never-applied session cannot adopt (poisoning regression)' } else { Bad 'adopt: foreign overwrite adopted without our apply' }
+
+# 11b. exe-token matching: document paths must not look like the game
+$n1 = Get-ExeNamesFromCommandLine 'notepad "C:\Games\GTA5\settings.xml"'
+if ($n1 -notcontains 'GTA5') { Good 'exe-match: document path is not the game' } else { Bad 'exe-match: document path looks like GTA5' }
+$n2 = Get-ExeNamesFromCommandLine '"C:\Games\Renamed.exe" -game "C:\GTA V\GTA5.exe"'
+if ($n2 -contains 'GTA5') { Good 'exe-match: renamed-binary argument still detected' } else { Bad 'exe-match: renamed-binary case lost' }
+$n3 = Get-ExeNamesFromCommandLine '"C:\Program Files\Rockstar Games\GTA V\GTA5.exe" -nobattleye'
+if ($n3 -contains 'GTA5') { Good 'exe-match: quoted exe with spaces' } else { Bad 'exe-match: quoted exe missed' }
+
+# 11c. Restore-VanillaBackup: a stale archive must never downgrade fresh bins
+$mjDir = Join-Path $sandbox 'majestic'
+New-Item -ItemType Directory -Force -Path (Join-Path $mjDir 'backup') | Out-Null
+$mj = Join-Path $mjDir 'majestic.json'
+[IO.File]::WriteAllText($mj, '{"cachePath":"C:\\x"}')
+$arc = Join-Path $sandbox 'vanilla_backup_archive\2020-01-01_000000'
+New-Item -ItemType Directory -Force -Path $arc | Out-Null
+[IO.File]::WriteAllText((Join-Path $arc 'update.rpf.bin'), 'OLD-ARCHIVE')
+$liveBin = Join-Path $mjDir 'backup\update.rpf.bin'
+[IO.File]::WriteAllText($liveBin, 'FRESH-LAUNCHER')
+$cfgB = @{ majesticJson = $mj }
+$r = Restore-VanillaBackup -Cfg $cfgB
+if ((-not $r) -and ([IO.File]::ReadAllText($liveBin) -eq 'FRESH-LAUNCHER')) { Good 'bins: fresh launcher bin is never downgraded' } else { Bad 'bins: stale archive overwrote a fresh bin' }
+Remove-Item $liveBin -Force
+if ((Restore-VanillaBackup -Cfg $cfgB) -and (Test-Path $liveBin)) { Good 'bins: missing bin restored from archive' } else { Bad 'bins: missing bin not restored' }
 
 # 12. regression guards on the watcher source
 $wtxt = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
 if ($wtxt -match '-not\s+\(Test-SameSettings') { Bad 'watcher: tri-state result used with -not (unreadable becomes drift)' }
 if ($wtxt -match 'sessionReapplied\s*=\s*\$true') { Bad 'watcher: the adopt-blocking flag is back' }
 if ($wtxt -notmatch '\}\s*finally\s*\{') { Bad 'watcher: $wasRunning must be updated in a finally block' }
+if ($wtxt -notmatch 'appliedThisSession') { Bad 'watcher: adopt must require a successful apply this session' }
+if ($wtxt -notmatch 'Test-AdoptCandidate[^\r\n]*\$appliedThisSession') { Bad 'watcher: adopt call does not pass the applied flag' }
+$repTxt = Get-Content (Join-Path $repo 'repair.ps1') -Raw
+if ($repTxt -match 'gta-settings-watcher\|MG_Helper') { Bad 'repair: loose alive-check pattern is back (matches itself)' }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
