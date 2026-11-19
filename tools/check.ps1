@@ -34,7 +34,8 @@ $script:ConfigFile = Join-Path $sandbox 'config.json'
 foreach ($fn in 'Get-MgConfig','Save-MgConfig','Resolve-MgPaths','Find-MatchingProcess','Write-Atomic',
                 'Test-GoldenValid','Get-ValidGolden','Apply-Golden','Get-MajesticBackupDir',
                 'Ensure-BinsRestored','Restore-VanillaBackup','Get-PkgVersion',
-                'Get-ExeNamesFromCommandLine','Get-CachedWalk','Archive-VanillaBins','Prune-BackupFiles') {
+                'Get-ExeNamesFromCommandLine','Get-CachedWalk','Archive-VanillaBins','Prune-BackupFiles',
+                'Get-LatestBinArchive') {
     if (-not (Get-Command $fn -ErrorAction SilentlyContinue)) { Bad "missing function $fn" }
 }
 
@@ -210,7 +211,14 @@ if ($wtxt -notmatch 'appliedThisSession') { Bad 'watcher: adopt must require a s
 if ($wtxt -notmatch 'Test-AdoptCandidate[^\r\n]*\$appliedThisSession') { Bad 'watcher: adopt call does not pass the applied flag' }
 $repTxt = Get-Content (Join-Path $repo 'repair.ps1') -Raw
 if ($repTxt -match 'gta-settings-watcher\|MG_Helper') { Bad 'repair: loose alive-check pattern is back (matches itself)' }
+$ctxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
 if ($wtxt -notmatch 'Archive-VanillaBins') { Bad 'watcher: vanilla bin archive is not built at exit (1002 insurance is a no-op)' }
+$restTxt = Get-Content (Join-Path $repo 'restore-mg-snapshot.ps1') -Raw
+if ($restTxt -notmatch 'mapping\.ContainsKey\(\$_\.Name\)') { Bad 'restore: manifest must filter unmapped (legacy/stale) files' }
+if ($restTxt -notmatch '\^f\\d\+\\\.json\$') { Bad 'restore: new-format fallback must return null, not fN.json' }
+if ($wtxt -notmatch 'rootPrefixes') { Bad 'watcher: stale snapshot sweep missing' }
+if ($ctxt -notmatch 'function Get-LatestBinArchive') { Bad 'common: Get-LatestBinArchive missing' }
+if ($ctxt -match 'Select-Object -First 1[\s\S]{0,200}vanilla_backup_archive') { Bad 'common: latest-only bin archive selection is back' }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
@@ -230,7 +238,40 @@ else {
 $wtxt2 = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
 if ($wtxt2 -notmatch 'restartPending') { Bad 'watcher: self-restart is not deferred during game sessions' }
 if ($wtxt2 -match 'Start-Process\s+\$psExe') { Bad 'watcher: direct powershell spawn remains (use the hidden host)' }
-if ($wtxt2 -notmatch 'Archive-VanillaBins') { Bad 'watcher: vanilla bin archive is not built at exit (1002 insurance is a no-op)' }
+
+# 11f. Archive-VanillaBins: a locked bin must not create an empty "latest" generation
+$cfgF = @{ majesticJson = $mj }   # $mj from section 11c
+$goodArc = Join-Path $sandbox 'vanilla_backup_archive\2099-01-01_000000'
+New-Item -ItemType Directory -Force -Path $goodArc | Out-Null
+[IO.File]::WriteAllText((Join-Path $goodArc 'update.rpf.bin'), 'GOOD-GEN')
+$liveF = Join-Path $mjDir 'backup\update.rpf.bin'
+[IO.File]::WriteAllText($liveF, 'LIVE-CONTENT')
+$gensBefore = @(Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory).Count
+$lock = [IO.File]::Open($liveF, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+$rF = Archive-VanillaBins -Cfg $cfgF
+$lock.Close(); $lock.Dispose()
+$gensAfter = @(Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory).Count
+if ((-not $rF) -and ($gensAfter -eq $gensBefore)) { Good 'archive: locked bin -> no empty generation' } else { Bad 'archive: torn generation became latest' }
+if (Get-LatestBinArchive) { Good 'archive: helper still finds the good generation' } else { Bad 'archive: helper lost the good generation' }
+
+# 11g. unchanged bins -> no new generation (skip the multi-GB copy)
+[IO.File]::WriteAllText((Join-Path $goodArc 'update.rpf.bin'), 'LIVE-CONTENT')
+(Get-Item (Join-Path $goodArc 'update.rpf.bin')).LastWriteTimeUtc = (Get-Item $liveF).LastWriteTimeUtc
+$rG = Archive-VanillaBins -Cfg $cfgF
+$gensG = @(Get-ChildItem (Join-Path $sandbox 'vanilla_backup_archive') -Directory).Count
+if ((-not $rG) -and ($gensG -eq $gensAfter)) { Good 'archive: unchanged bins skip the copy' } else { Bad 'archive: unchanged bins re-copied' }
+
+# 11h. changed bins -> fresh verified generation
+[IO.File]::WriteAllText($liveF, 'LIVE-CONTENT-V2')
+$rH = Archive-VanillaBins -Cfg $cfgF
+if ($rH) { Good 'archive: changed bins archived' } else { Bad 'archive: changed bins not archived' }
+
+# 11i. Get-LatestBinArchive skips an empty newest generation
+$emptyGen = Join-Path $sandbox 'vanilla_backup_archive\2030-01-01_000000'
+New-Item -ItemType Directory -Force -Path $emptyGen | Out-Null
+$arcI = Get-LatestBinArchive
+if ($arcI -and ($arcI.dir.Name -ne '2030-01-01_000000')) { Good 'archive: empty newest generation skipped' } else { Bad 'archive: empty generation treated as latest' }
+Remove-Item $emptyGen -Recurse -Force
 
 Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 if ($fail) { Write-Host ''; Write-Host 'ERRORS FOUND - do not commit.' -ForegroundColor Red; exit 1 }
