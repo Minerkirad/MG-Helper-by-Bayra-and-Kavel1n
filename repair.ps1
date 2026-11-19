@@ -99,4 +99,3 @@ foreach ($r in $results) {
 }
 Write-Host ""
 Write-Host "Если проблемы остались - запусти пункт Диагностика и пришли отчёт." -ForegroundColor Cyan
-pause
