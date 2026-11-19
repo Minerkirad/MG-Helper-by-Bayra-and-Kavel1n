@@ -53,6 +53,10 @@ $utf8bom = [Text.UTF8Encoding]::new($true)
 foreach ($f in $deploy) {
     $srcFile = Join-Path $PSScriptRoot $f
     if (-not (Test-Path -LiteralPath $srcFile)) {
+        if ($f -eq 'version.json') {
+            Write-Host '[i] version.json missing - using fallback version.' -ForegroundColor DarkGray
+            continue
+        }
         Write-Host "[!] $f missing next to this installer - re-download the whole package." -ForegroundColor Red
         pause; exit 1
     }
@@ -114,7 +118,7 @@ $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe
 $argLine = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watcherDst`""
 $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
 $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10)
+$tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
 $set = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 $regOk = $false
 try {
@@ -126,20 +130,20 @@ try {
 }
 if ($regOk) { Write-Host '[+] Watchdog task registered (logon + 10-min repeat).' -ForegroundColor Green }
 else { Write-Host '[!] Watchdog task registration failed.' -ForegroundColor Red }
-Write-Host "[+] Scheduled task registered (logon + 10-min watchdog)." -ForegroundColor Green
 
 # ------------------------------------------------------------
 # 6. start watcher
 # ------------------------------------------------------------
 Start-Process $exe -ArgumentList $argLine -WindowStyle Hidden
 Start-Sleep 4
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'gta-settings-watcher|MG_Helper' })
+$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
+    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID })
 if ($alive.Count -gt 0) {
     Write-Host "[+] Watcher v6 is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } else {
-    Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [7] Diagnose." -ForegroundColor Red
+    Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [8] Diagnose." -ForegroundColor Red
 }
 pause
 
