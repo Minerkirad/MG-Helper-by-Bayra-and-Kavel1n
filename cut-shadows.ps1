@@ -88,4 +88,3 @@ foreach ($file in @($Golden, $Settings)) {
 }
 Write-Host "[+] Shadow-cut applied (golden: $($merged[$Golden].count), settings: $($merged[$Settings].count) values)" -ForegroundColor Green
 Write-Host "[+] Backup: settings.golden.xml.before_shadows_$stamp / settings.xml.before_shadows_$stamp" -ForegroundColor DarkGray
-pause
