@@ -153,6 +153,24 @@ if ($wtxt -match '-not\s+\(Test-SameSettings') { Bad 'watcher: tri-state result 
 if ($wtxt -match 'sessionReapplied\s*=\s*\$true') { Bad 'watcher: the adopt-blocking flag is back' }
 if ($wtxt -notmatch '\}\s*finally\s*\{') { Bad 'watcher: $wasRunning must be updated in a finally block' }
 
+# 13. hidden host: source deployed, installer compiles it and starts via the task,
+#     watcher restarts defer during game sessions
+$hostCs = Join-Path $repo 'MG-Helper-Host.cs'
+if (-not (Test-Path $hostCs)) { Bad 'MG-Helper-Host.cs missing from repo' }
+else {
+    $hTxt = Get-Content $hostCs -Raw
+    foreach ($needle in 'CreateNoWindow', 'TryOpenExisting', 'WaitForExit') {
+        if ($hTxt -notmatch $needle) { Bad "MG-Helper-Host.cs: missing '$needle'" }
+    }
+    $instTxt2 = Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw
+    if ($instTxt2 -notmatch 'MG-Helper-Host\.cs') { Bad 'installer: host source is not in the deploy list' }
+    if ($instTxt2 -notmatch 'Add-Type.*OutputAssembly') { Bad 'installer: does not compile the hidden host' }
+    if ($instTxt2 -notmatch 'Start-ScheduledTask') { Bad 'installer: must start the watcher via Start-ScheduledTask (no console flash)' }
+}
+$wtxt2 = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
+if ($wtxt2 -notmatch 'restartPending') { Bad 'watcher: self-restart is not deferred during game sessions' }
+if ($wtxt2 -match 'Start-Process\s+\$psExe') { Bad 'watcher: direct powershell spawn remains (use the hidden host)' }
+
 Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 if ($fail) { Write-Host ''; Write-Host 'ERRORS FOUND - do not commit.' -ForegroundColor Red; exit 1 }
 Write-Host ''; Write-Host 'ALL GREEN - safe to commit.' -ForegroundColor Green
