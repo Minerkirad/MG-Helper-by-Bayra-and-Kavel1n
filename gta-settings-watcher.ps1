@@ -362,6 +362,10 @@ while ($true) {
                 }
             }
             Restore-VanillaBackup -Cfg $cfg | Out-Null
+            # build the 1002 insurance: copy (never move) launcher bins to the
+            # archive now that the game is closed - safe from the patcher race
+            if (Archive-VanillaBins -Cfg $cfg) { Log "vanilla bins archived (copy, insurance against error 1002)" }
+            Prune-BackupFiles -Pattern 'settings.golden.xml.old_*'
             $state.phase = 'Idle'
             $state.gamePid = $null
             $state.sessionStart = $null
