@@ -34,7 +34,7 @@ $script:ConfigFile = Join-Path $sandbox 'config.json'
 foreach ($fn in 'Get-MgConfig','Save-MgConfig','Resolve-MgPaths','Find-MatchingProcess','Write-Atomic',
                 'Test-GoldenValid','Get-ValidGolden','Apply-Golden','Get-MajesticBackupDir',
                 'Ensure-BinsRestored','Restore-VanillaBackup','Get-PkgVersion',
-                'Get-ExeNamesFromCommandLine','Get-CachedWalk') {
+                'Get-ExeNamesFromCommandLine','Get-CachedWalk','Archive-VanillaBins','Prune-BackupFiles') {
     if (-not (Get-Command $fn -ErrorAction SilentlyContinue)) { Bad "missing function $fn" }
 }
 
@@ -173,6 +173,34 @@ if ((-not $r) -and ([IO.File]::ReadAllText($liveBin) -eq 'FRESH-LAUNCHER')) { Go
 Remove-Item $liveBin -Force
 if ((Restore-VanillaBackup -Cfg $cfgB) -and (Test-Path $liveBin)) { Good 'bins: missing bin restored from archive' } else { Bad 'bins: missing bin not restored' }
 
+# 11d. Archive-VanillaBins: copies bins (never moves), prunes old generations
+$g2 = Get-MgConfig
+if (-not $g2.docsRoot) { }   # no-op, config sanity
+$arcR = Join-Path $sandbox 'vanilla_backup_archive'
+[IO.File]::WriteAllText($liveBin, 'FRESH-LAUNCHER')
+if ((Archive-VanillaBins -Cfg $cfgB) -and (Test-Path "$arcR") -and (Test-Path $liveBin) -and ((Get-Content $liveBin -Raw) -eq 'FRESH-LAUNCHER')) {
+    Good 'bins: archive created, original kept (copy-only)'
+} else { Bad 'bins: Archive-VanillaBins failed or moved the original' }
+$gen1 = @(Get-ChildItem $arcR -Directory)[0].Name
+Start-Sleep -Milliseconds 1100   # timestamped dirs need distinct names
+[IO.File]::WriteAllText($liveBin, 'SECOND-GEN')
+Archive-VanillaBins -Cfg $cfgB | Out-Null
+$gen2 = @(Get-ChildItem $arcR -Directory | Sort-Object Name -Descending)[0].Name
+if ($gen2 -ne $gen1) { Good 'bins: second archive generation created' } else { Bad 'bins: second generation not created' }
+# prune: Keep=1 must delete the older generation
+Archive-VanillaBins -Cfg $cfgB -Keep 1 | Out-Null
+$left = @(Get-ChildItem $arcR -Directory).Count
+if ($left -eq 1) { Good 'bins: archive retention prunes old generations' } else { Bad "bins: retention left $left generations" }
+
+# 11e. Prune-BackupFiles: keeps newest N, removes the rest
+for ($i = 0; $i -lt 12; $i++) {
+    [IO.File]::WriteAllText((Join-Path $sandbox ("settings.golden.xml.old_2020-01-01_0000{0:d2}" -f $i)), 'x')
+    Start-Sleep -Milliseconds 30   # distinct LastWriteTime for deterministic sorting
+}
+Prune-BackupFiles -Pattern 'settings.golden.xml.old_*' -Keep 10
+$leftBackups = @(Get-ChildItem $sandbox -Filter 'settings.golden.xml.old_*' -File).Count
+if ($leftBackups -eq 10) { Good 'backups: retention keeps the newest 10' } else { Bad "backups: retention left $leftBackups" }
+
 # 12. regression guards on the watcher source
 $wtxt = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
 if ($wtxt -match '-not\s+\(Test-SameSettings') { Bad 'watcher: tri-state result used with -not (unreadable becomes drift)' }
@@ -182,6 +210,7 @@ if ($wtxt -notmatch 'appliedThisSession') { Bad 'watcher: adopt must require a s
 if ($wtxt -notmatch 'Test-AdoptCandidate[^\r\n]*\$appliedThisSession') { Bad 'watcher: adopt call does not pass the applied flag' }
 $repTxt = Get-Content (Join-Path $repo 'repair.ps1') -Raw
 if ($repTxt -match 'gta-settings-watcher\|MG_Helper') { Bad 'repair: loose alive-check pattern is back (matches itself)' }
+if ($wtxt -notmatch 'Archive-VanillaBins') { Bad 'watcher: vanilla bin archive is not built at exit (1002 insurance is a no-op)' }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
@@ -196,10 +225,12 @@ else {
     if ($instTxt2 -notmatch 'MG-Helper-Host\.cs') { Bad 'installer: host source is not in the deploy list' }
     if ($instTxt2 -notmatch 'Add-Type.*OutputAssembly') { Bad 'installer: does not compile the hidden host' }
     if ($instTxt2 -notmatch 'Start-ScheduledTask') { Bad 'installer: must start the watcher via Start-ScheduledTask (no console flash)' }
+    if ($instTxt2 -notmatch 'host smoke') { Bad 'installer: hidden host is not smoke-run (AppLocker/AV would silently break the task)' }
 }
 $wtxt2 = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
 if ($wtxt2 -notmatch 'restartPending') { Bad 'watcher: self-restart is not deferred during game sessions' }
 if ($wtxt2 -match 'Start-Process\s+\$psExe') { Bad 'watcher: direct powershell spawn remains (use the hidden host)' }
+if ($wtxt2 -notmatch 'Archive-VanillaBins') { Bad 'watcher: vanilla bin archive is not built at exit (1002 insurance is a no-op)' }
 
 Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 if ($fail) { Write-Host ''; Write-Host 'ERRORS FOUND - do not commit.' -ForegroundColor Red; exit 1 }
