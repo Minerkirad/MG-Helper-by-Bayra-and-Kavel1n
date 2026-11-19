@@ -264,6 +264,20 @@ if ($ctxt -match 'Remove-Item -LiteralPath \$script:ConfigFile') { Bad 'common: 
 if ($wtxt -notmatch 'UnknownSession') { Bad 'watcher: safe UnknownSession mode missing (MG-CR-004)' }
 if ($wtxt -notmatch 'pre-apply backup FAILED') { Bad 'watcher: pre-apply backup failure must block the golden apply (MG-CR-006)' }
 if ((Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw) -notmatch 'FALLBACK: 10-min repeat only') { Bad 'installer: schtasks fallback must be verified and honestly reported (MG-CR-007)' }
+# MG-CR-008..012 guards (round 6)
+$rstTxt = Get-Content (Join-Path $repo 'reset-settings.ps1') -Raw
+if ($rstTxt -match 'Copy-Item \$Settings \$Golden') { Bad 'reset-settings: non-atomic golden write is back (MG-CR-008)' }
+if ($rstTxt -notmatch 'Test-GoldenValid \$Golden') { Bad 'reset-settings: new golden not verified after write (MG-CR-008)' }
+foreach ($pf in 'max-fps.ps1', 'cut-shadows.ps1') {
+    $ptxt = Get-Content (Join-Path $repo $pf) -Raw
+    if ($ptxt -notmatch 'ROLLED BACK') { Bad "${pf}: no transactional rollback of golden (MG-CR-009)" }
+}
+$repTxt2 = Get-Content (Join-Path $repo 'repair.ps1') -Raw
+if ($repTxt2 -notmatch 'Восстановить эталон из текущих настроек') { Bad 'repair: LIVE-settings heal must ask for confirmation (MG-CR-010)' }
+$diaTxt = Get-Content (Join-Path $repo 'diagnose.ps1') -Raw
+if ($diaTxt -notmatch '<USER>') { Bad 'diagnose: report must mask the username by default (MG-CR-011)' }
+$uniTxt = Get-Content (Join-Path $repo 'uninstall.ps1') -Raw
+if ($uniTxt -notmatch 'РЕЗУЛЬТАТ УДАЛЕНИЯ') { Bad 'uninstall: per-action summary missing (MG-CR-012)' }
 
 # 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
 $vx = Join-Path $sandbox 'valid_settings.xml'
