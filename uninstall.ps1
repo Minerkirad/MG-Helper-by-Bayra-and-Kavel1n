@@ -19,6 +19,7 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'"
 
 # 3. autostart: scheduled task + legacy mechanisms
 schtasks /Delete /TN 'MG_Helper_Watcher' /F 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Host '[i] задача автозапуска не найдена (уже удалена).' -ForegroundColor DarkGray }
 schtasks /Delete /TN 'MG_Helper_Watchdog' /F 2>&1 | Out-Null
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue
 
