@@ -34,7 +34,7 @@ if (-not $Settings) { $Settings = Find-SettingsXml }
 if (-not ((Test-Path $Golden) -and (Test-Path $Settings))) {
     Write-Host "[!] golden or settings.xml not found" -ForegroundColor Red
     Write-Host "    Run MG-Helper.bat -> [1] first, or check the paths in $ConfigFile" -ForegroundColor DarkGray
-    pause; exit 1
+    exit 1
 }
 
 # refuse to fight a running game: it holds settings.xml and rewrites it on exit
@@ -46,7 +46,7 @@ if (Get-Command Find-MatchingProcess -ErrorAction SilentlyContinue) {
 }
 if ($gameRunning) {
     Write-Host "[!] GTA V is running - close the game first, then apply again." -ForegroundColor Red
-    pause; exit 1
+    exit 1
 }
 
 $values = [ordered]@{
@@ -71,7 +71,7 @@ foreach ($file in @($Golden, $Settings)) {
         $pattern = "(?<=<$k value=`")[^`"]*(?=`")"
         if ($s -match $pattern) { $s = [regex]::Replace($s, $pattern, $values[$k]); $n++ }
     }
-    if ($s -match '\$\d') { Write-Host "[!] corrupt merge - aborted, nothing changed" -ForegroundColor Red; pause; exit 1 }
+    if ($s -match '\$\d') { Write-Host "[!] corrupt merge - aborted, nothing changed" -ForegroundColor Red; exit 1 }
     $merged[$file] = @{ text = $s; count = $n }
 }
 # phase 2: atomic writes
@@ -80,7 +80,7 @@ foreach ($file in @($Golden, $Settings)) {
     if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
         if (-not (Write-Atomic -Path $file -Bytes $bytes)) {
             Write-Host "[!] could not write $file (locked?) - profile NOT fully applied" -ForegroundColor Red
-            pause; exit 1
+            exit 1
         }
     } else {
         [IO.File]::WriteAllText($file, $bytes, [Text.UTF8Encoding]::new($true))  # fallback: no common.ps1
