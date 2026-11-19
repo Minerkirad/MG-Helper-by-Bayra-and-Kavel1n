@@ -1,25 +1,34 @@
 ﻿# ============================================================
-#  MG Helper - common.ps1 (universal discovery + config)
+#  MG Helper - common.ps1 (universal discovery + config + shared ops)
 #  by Bayra & Kavel1n
 #
-#  Shared by the watcher and all helper tools (reset/import/
-#  clean/maxfps/shadows). Everything here is PS 5.1-safe.
-#
-#  The ONE idea: never assume where things live. Discover
-#  settings.xml / MiamiGraphics / Majestic on THIS PC, cache the
-#  result in config.json next to the helper, and let a human
-#  override any value by editing that file.
+#  Dot-sourced by the watcher, menu, repair and helper tools.
+#  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
+$script:Version = '1.6.0'
+$script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
-$script:Version = '1.5.0'
-# CIM command-line scan is expensive - throttle it (min interval + cached result)
-$script:lastCimScan = [datetime]::MinValue
-$script:lastCimHits = @()
+$script:VersionFile = Join-Path $PSScriptRoot 'version.json'
 
 # ------------------------------------------------------------
-# config load/save (JSON, PS 5.1-safe)
+# version: version.json is the single source of truth,
+# fallback to the hardcoded value if the file is missing/broken
+# ------------------------------------------------------------
+function Get-PkgVersion {
+    try {
+        $vf = Join-Path $PSScriptRoot 'version.json'
+        if (Test-Path -LiteralPath $vf) {
+            $v = (Get-Content -LiteralPath $vf -Raw -ErrorAction Stop | ConvertFrom-Json).version
+            if ($v) { return [string]$v }
+        }
+    } catch {}
+    return $script:Version
+}
+
+# ------------------------------------------------------------
+# config load/save (JSON, atomic replace, broken-config backup)
 # ------------------------------------------------------------
 function Get-MgConfig {
     $cfg = [ordered]@{
@@ -28,22 +37,27 @@ function Get-MgConfig {
         miamiGraphicsDir  = ''
         majesticJson      = ''
         lastFullDiscovery = ''
-        gameProcesses     = @('GTA5','GTA5_Enhanced')
-        launcherProcesses = @('Majestic','MajesticLauncher','majestic-launcher')
-        mgProcesses       = @('Miami','MiamiGraphics')
+        gameProcesses     = @('GTA5', 'GTA5_Enhanced')
+        launcherProcesses = @('Majestic', 'MajesticLauncher', 'majestic-launcher')
+        mgProcesses       = @('Miami', 'MiamiGraphics')
         useHotswapAgent   = $false
-autoCleanDlccache = $false
         autoArchiveBins   = $false
+        autoCleanDlccache = $false
+        onExit            = 'adopt'
+        notifications     = $true
     }
-    if (Test-Path $script:ConfigFile) {
+    if (Test-Path -LiteralPath $script:ConfigFile) {
         try {
-            $loaded = Get-Content $script:ConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json
+            $loaded = Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop | ConvertFrom-Json
             foreach ($p in @($cfg.Keys)) {
                 if ($null -ne $loaded.$p) { $cfg[$p] = $loaded.$p }
             }
         } catch {
-            # config exists but is broken - leave defaults, rewrite on Save
-            Write-Host "[i] config.json unreadable ($($_.Exception.Message)); using defaults" -ForegroundColor DarkGray
+            # config exists but is broken - keep a copy for the user, use defaults
+            try {
+                $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+                Copy-Item -LiteralPath $script:ConfigFile (Join-Path $script:HelperDir "config.json.broken_$stamp.bak") -Force -ErrorAction SilentlyContinue
+            } catch {}
         }
     }
     return $cfg
@@ -54,13 +68,15 @@ function Save-MgConfig {
     try {
         New-Item -ItemType Directory -Force -Path $script:HelperDir -ErrorAction Stop | Out-Null
         $json = $Config | ConvertTo-Json -Depth 4
-        # near-atomic replace: no torn reads while the watcher re-reads the config
         $tmp = "$script:ConfigFile.tmp"
         [IO.File]::WriteAllText($tmp, $json, [Text.UTF8Encoding]::new($false))
-        Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
-        Move-Item -LiteralPath $tmp $script:ConfigFile -Force
+        if (Test-Path -LiteralPath $script:ConfigFile) { [IO.File]::Replace($tmp, $script:ConfigFile, $null) }
+        else { Move-Item -LiteralPath $tmp $script:ConfigFile -Force }
     } catch {
-        Write-Host "[i] could not save config: $($_.Exception.Message)" -ForegroundColor DarkGray
+        try {
+            Remove-Item -LiteralPath $script:ConfigFile -Force -ErrorAction SilentlyContinue
+            Move-Item -LiteralPath $tmp $script:ConfigFile -Force
+        } catch {}
     }
 }
 
@@ -73,7 +89,6 @@ function Get-DocsRoots {
     try   { $roots += "$env:USERPROFILE\OneDrive\Documents" } catch {}
     try   { $roots += "$env:USERPROFILE\OneDrive\Документы" } catch {}
     try   { $roots += "$env:USERPROFILE\Documents" } catch {}
-    # registry KFM (finds any custom "Документы" location, incl. OneDriveДокументы)
     try {
         $personal = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' -Name Personal -ErrorAction Stop).Personal
         if ($personal) {
@@ -81,7 +96,6 @@ function Get-DocsRoots {
             if ($expanded -match '^(?:[A-Za-z]:|\\\\)') { $roots += $expanded }
         }
     } catch {}
-    # any OneDrive* folder at profile root (localized names: OneDrive, OneDriveДокументы, OneDrive - Org...)
     foreach ($one in (Get-ChildItem "$env:USERPROFILE" -Directory -Filter 'OneDrive*' -ErrorAction SilentlyContinue)) {
         $roots += $one.FullName
         $roots += (Join-Path $one.FullName 'Documents')
@@ -92,20 +106,17 @@ function Get-DocsRoots {
 
 # ------------------------------------------------------------
 # GTA install discovery via registry (Steam / Epic / Rockstar)
-# Returns @{ root = <game dir>; variant = 'GTA V' | 'GTA V Enhanced' } or $null
-# Used to pick the right settings.xml tail (Enhanced uses its own Documents dir)
+# Returns @{ root; variant = 'GTA V' | 'GTA V Enhanced' } or $null
 # ------------------------------------------------------------
 function Find-GtaGameRoot {
     $roots = @()
-
-    # Steam: SteamPath + all library folders from libraryfolders.vdf
     try {
         $steam = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath
         $libs = @($steam)
         $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
         if (Test-Path -LiteralPath $vdf) {
-            foreach ($m in ([regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"'))) {
-                $libs += ($m.Groups[1].Value -replace '\\\\','\')
+            foreach ($m in ([regex]::Matches((Get-Content -LiteralPath $vdf -Raw), '"path"\s+"([^"]+)"'))) {
+                $libs += ($m.Groups[1].Value -replace '\\\\', '\')
             }
         }
         foreach ($lib in ($libs | Select-Object -Unique)) {
@@ -114,13 +125,9 @@ function Find-GtaGameRoot {
             }
         }
     } catch {}
-
-    # Epic: manifest items often under ProgramData; check common roots
     foreach ($r in @("$env:ProgramData\Epic\EpicGamesLauncher", "$env:ProgramFiles\Epic Games")) {
         if (Test-Path -LiteralPath $r) { $roots += $r }
     }
-
-    # Rockstar / generic uninstall keys mentioning GTA
     foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
         try {
@@ -133,7 +140,6 @@ function Find-GtaGameRoot {
             }
         } catch {}
     }
-
     foreach ($r in ($roots | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $r)) { continue }
         $variant = if ($r -match 'Enhanced') { 'GTA V Enhanced' } else { 'GTA V' }
@@ -145,13 +151,12 @@ function Find-GtaGameRoot {
 }
 
 # ------------------------------------------------------------
-# settings.xml discovery (multi-strategy, then bounded profile walk)
-# Tail ORDER depends on the discovered game variant (Enhanced vs Legacy)
+# settings.xml validation + discovery
+# (tail order is variant-aware via Find-GtaGameRoot)
 # ------------------------------------------------------------
 function Test-ValidSettingsXml {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    # never trust anything from Temp / sandbox / our own backups
     if ($Path -match '\\Temp\\|_settings_backup|MG_Helper') { return $false }
     try {
         $c = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
@@ -160,40 +165,36 @@ function Test-ValidSettingsXml {
 }
 
 function Find-SettingsXml {
-    # variant-aware tail order (registry finds the installed game version)
+    param([switch]$NoWalk)
     $tails = @('Rockstar Games\GTA V\settings.xml', 'Rockstar Games\GTA V Enhanced\settings.xml')
     $game = Find-GtaGameRoot
     if ($game -and $game.variant -eq 'GTA V Enhanced') {
         $tails = @('Rockstar Games\GTA V Enhanced\settings.xml', 'Rockstar Games\GTA V\settings.xml')
     }
-
     foreach ($d in (Get-DocsRoots)) {
         foreach ($tail in $tails) {
             $c = Join-Path $d $tail
             if ((Test-Path -LiteralPath $c -PathType Leaf) -and (Test-ValidSettingsXml $c)) { return $c }
         }
     }
-    # bounded recursive walk: only dirs matching *GTA V* or *Rockstar*,
-    # never inside Temp / backup folders, content validated
+    if ($NoWalk) { return $null }
     $cands = Get-ChildItem "$env:USERPROFILE" -Recurse -Depth 6 -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match 'GTA\s*V|Rockstar' -and $_.FullName -notmatch '\\Temp\\|_settings_backup|MG_Helper' }
+        Where-Object { $_.Name -match 'GTA\s*V|Rockstar' -and $_.FullName -notmatch '\\Temp\\|\\AppData\\|_settings_backup|MG_Helper' }
     foreach ($c in $cands) {
         $f = Join-Path $c.FullName 'settings.xml'
-        if ((Test-Path -LiteralPath $f -PathType Leaf) -and (Test-ValidSettingsXml $f)) {
-            return $f
-        }
+        if ((Test-Path -LiteralPath $f -PathType Leaf) -and (Test-ValidSettingsXml $f)) { return $f }
     }
     return $null
 }
 
 # ------------------------------------------------------------
-# MiamiGraphics discovery (Roaming + Local + bounded profile walk),
-# content-validated: a real MG dir has config\ or a known json inside
+# MiamiGraphics discovery, content-validated
 # ------------------------------------------------------------
 function Test-ValidMgDir {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
-    foreach ($probe in @('config\installed_version.txt','config\gpu.json','install_state.json','optimization_baseline.json','gta_settings_preset.json','config\optimization_mods.json')) {
+    foreach ($probe in @('config\installed_version.txt', 'config\gpu.json', 'install_state.json',
+                         'optimization_baseline.json', 'gta_settings_preset.json', 'config\optimization_mods.json')) {
         if (Test-Path -LiteralPath (Join-Path $Path $probe)) { return $true }
     }
     return $false
@@ -212,15 +213,14 @@ function Find-MiamiGraphicsDir {
 }
 
 # ------------------------------------------------------------
-# Majestic config discovery (APPDATA + bounded profile walk),
-# content-validated: must parse as JSON with a cachePath-like key
+# Majestic config discovery, content-validated
 # ------------------------------------------------------------
 function Test-ValidMajesticJson {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     try {
         $j = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
-        foreach ($k in @('cachePath','gamePath','installPath','gtaPath','name')) {
+        foreach ($k in @('cachePath', 'gamePath', 'installPath', 'gtaPath', 'name', 'gtapath')) {
             if ($j.$k) { return $true }
         }
         return $false
@@ -238,43 +238,65 @@ function Find-MajesticJson {
 }
 
 # ------------------------------------------------------------
-# Majestic cache path from its json (any schema: cachePath / cache / CachePath)
+# Majestic paths from its json (any schema variant)
 # ------------------------------------------------------------
-function Get-MajesticCachePath {
-    param($MajesticJson)
+function Get-MajesticValue {
+    param($MajesticJson, [string[]]$Keys)
     if (-not $MajesticJson -or -not (Test-Path -LiteralPath $MajesticJson)) { return $null }
     try {
-        $j = Get-Content $MajesticJson -Raw | ConvertFrom-Json
-        foreach ($k in @('cachePath','cache','CachePath','cache_path')) {
-            if ($j.$k -and (Test-Path -LiteralPath ($j.$k -replace '"',''))) { return ($j.$k -replace '"','') }
+        $j = Get-Content -LiteralPath $MajesticJson -Raw -ErrorAction Stop | ConvertFrom-Json
+        foreach ($k in $Keys) {
+            if ($j.$k -and (Test-Path -LiteralPath ($j.$k -replace '"', ''))) { return ($j.$k -replace '"', '') }
         }
         return $null
     } catch { return $null }
 }
 
+function Get-MajesticCachePath {
+    param($MajesticJson)
+    Get-MajesticValue -MajesticJson $MajesticJson -Keys @('cachePath', 'cache', 'CachePath', 'cache_path')
+}
+
+function Get-MajesticGamePath {
+    param($MajesticJson)
+    Get-MajesticValue -MajesticJson $MajesticJson -Keys @('gamePath', 'installPath', 'gtaPath', 'gtapath')
+}
+
+function Get-MajesticBackupDir {
+    param($Cfg)
+    if ($Cfg -and $Cfg.majesticJson -and (Test-Path -LiteralPath $Cfg.majesticJson)) {
+        $d = Join-Path (Split-Path $Cfg.majesticJson) 'backup'
+        if (Test-Path -LiteralPath $d) { return $d }
+    }
+    $d = Join-Path $env:APPDATA 'majestic-launcher\Multiplayer\backup'
+    if (Test-Path -LiteralPath $d) { return $d }
+    return $null
+}
+
 # ------------------------------------------------------------
-# Process detection: by process NAME first, then any process whose
-# COMMAND LINE contains one of the patterns (covers renamed binaries).
-# The expensive CIM scan is THROTTLED: max once per 60 s, result cached.
-# Returns matching process objects (Name, Id, CommandLine).
+# Process detection: name-based (fast) first, then command-line
+# fallback via CIM - THROTTLED to once per 60 s with cached result.
+# powershell/pwsh hosts are EXCLUDED from the command-line fallback
+# (otherwise the watcher mistakes its own tools for Majestic).
 # ------------------------------------------------------------
 function Find-MatchingProcess {
     param([string[]]$Patterns)
     if (-not $Patterns) { return @() }
     $hits = @()
     try {
-        foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+        foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) {
+            if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
             if ($Patterns | Where-Object { $p.Name -like "*$_*" }) { $hits += $p }
         }
     } catch {}
     if (-not $hits) {
-        # slow path: CIM command-line scan - throttled to once per 60 s
         $since = ((Get-Date) - $script:lastCimScan).TotalSeconds
         if ($since -lt 60) { return @($script:lastCimHits) }
         $script:lastCimScan = Get-Date
         try {
             foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
                 if ($p.CommandLine) {
+                    if ($p.Name -match '^(powershell|pwsh)(\.exe)?$') { continue }
                     if ($Patterns | Where-Object { $p.CommandLine -match [regex]::Escape($_) }) { $hits += $p }
                 }
             }
@@ -283,68 +305,105 @@ function Find-MatchingProcess {
     }
     return @($hits | Select-Object -Unique Name, Id, CommandLine)
 }
+$script:lastCimScan = [datetime]::MinValue
+$script:lastCimHits = @()
 
 # ------------------------------------------------------------
-# one-shot: resolve everything, persist to config, return config.
-# -NoSave skips writing (watcher loop calls this every 5 s)
+# atomic write (temp + Replace, retry 3x, read-only cleared)
 # ------------------------------------------------------------
-function Resolve-MgPaths {
-    param([switch]$NoSave, [switch]$ForceFull)
-    $cfg = Get-MgConfig
-    $changed = $false
-
-    # cached path must exist AND be a valid settings.xml outside Temp/backups;
-    # a poisoned cache (e.g. sandbox leftovers) is re-discovered automatically
-    $cachedOk = $false
-    if ($cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)) {
-        $cachedOk = Test-ValidSettingsXml $cfg.settingsXml
-    }
-    # full re-discovery at most once per 24 h (catches relocated installs)
-    $stale = $true
-    try {
-        $last = [datetime]$cfg.lastFullDiscovery
-        $stale = ((Get-Date) - $last).TotalHours -ge 24
-    } catch {}
-    if (-not $cachedOk -or $ForceFull -or ($stale -and -not $NoSave)) {
-        $found = Find-SettingsXml
-        if ($found -and ($found -ne $cfg.settingsXml)) {
-            $cfg.settingsXml = $found; $changed = $true
+function Write-Atomic {
+    param([string]$Path, [byte[]]$Bytes)
+    $tmp = "$Path.mgtmp"
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                if ((Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue).IsReadOnly) {
+                    Set-ItemProperty -LiteralPath $Path -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+                }
+                [IO.File]::Replace($tmp, $Path, $null)
+            } else {
+                [IO.File]::WriteAllBytes($tmp, $Bytes)
+                Move-Item -LiteralPath $tmp $Path -Force
+            }
+            return $true
+        } catch {
+            Start-Sleep -Seconds 1
         }
-        $cfg.lastFullDiscovery = (Get-Date).ToString('o'); $changed = $true
     }
-
-    # cached MG dir must be content-validated (empty leftovers poison the cache)
-    if (-not $cfg.miamiGraphicsDir -or -not (Test-ValidMgDir $cfg.miamiGraphicsDir)) {
-        $found = Find-MiamiGraphicsDir
-        if ($found -and ($found -ne $cfg.miamiGraphicsDir)) {
-            $cfg.miamiGraphicsDir = $found; $changed = $true
-        }
-        elseif (-not $found -and $cfg.miamiGraphicsDir) { $cfg.miamiGraphicsDir = ''; $changed = $true }
-    }
-    # cached majestic.json must parse and look real
-    if (-not $cfg.majesticJson -or -not (Test-ValidMajesticJson $cfg.majesticJson)) {
-        $found = Find-MajesticJson
-        if ($found -and ($found -ne $cfg.majesticJson)) {
-            $cfg.majesticJson = $found; $changed = $true
-        }
-        elseif (-not $found -and $cfg.majesticJson) { $cfg.majesticJson = ''; $changed = $true }
-    }
-    if (-not $NoSave -and $changed) { Save-MgConfig $cfg }
-    return $cfg
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    return $false
 }
 
 # ------------------------------------------------------------
-# Majestic game path from extra json keys (gamePath / installPath / gtaPath)
-# Used by Diagnose to show the launcher's game folder + variant
+# golden validation + self-heal chain
 # ------------------------------------------------------------
-function Get-MajesticGamePath {
-    param($MajesticJson)
-    if (-not $MajesticJson -or -not (Test-Path -LiteralPath $MajesticJson)) { return $null }
+function Test-GoldenValid {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try {
-        $j = Get-Content $MajesticJson -Raw | ConvertFrom-Json
-        foreach ($k in @('gamePath','installPath','gtaPath')) {
-            if ($j.$k -and (Test-Path -LiteralPath ($j.$k -replace '"',''))) { return ($j.$k -replace '"','') }
-        }
-        return $null
-    } catch { return $null }
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        return ($raw.Length -gt 100 -and $raw -match '<Settings>' -and ($raw -notmatch '\$\d'))
+    } catch { return $false }
+}
+
+function Get-ValidGolden {
+    param([string]$CfgSettingsXml)
+    $chain = @(
+        (Join-Path $script:HelperDir 'settings.golden.xml'),
+        (Join-Path $script:HelperDir 'settings.golden.xml.bak'),
+        (Join-Path $script:HelperDir 'settings.before_apply.bak'),
+        $CfgSettingsXml
+    )
+    foreach ($c in ($chain | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-GoldenValid $c) { return @{ path = $c; healed = ($c -ne $chain[0]) } }
+    }
+    return $null
+}
+
+function Apply-Golden {
+    # self-heal golden if corrupt, then atomically apply to settings.xml
+    param($Cfg)
+    $src = Get-ValidGolden -CfgSettingsXml $Cfg.settingsXml
+    if (-not $src) { return $false }
+    if ($src.healed) {
+        Copy-Item -LiteralPath $src.path (Join-Path $script:HelperDir 'settings.golden.xml') -Force
+    }
+    $goldenBytes = [IO.File]::ReadAllBytes((Join-Path $script:HelperDir 'settings.golden.xml'))
+    return (Write-Atomic -Path $Cfg.settingsXml -Bytes $goldenBytes)
+}
+
+# ------------------------------------------------------------
+# vanilla bins: ensure present in the launcher backup dir
+# (safety net against the error-1002 stuck state)
+# ------------------------------------------------------------
+function Ensure-BinsRestored {
+    param($Cfg)
+    try {
+        $bkDir = Get-MajesticBackupDir -Cfg $Cfg
+        if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return $false }
+        $bins = Get-ChildItem $bkDir -Filter '*.bin' -ErrorAction SilentlyContinue
+        if (@($bins).Count -gt 0) { return $true }
+        $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
+        $latest = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+        if (-not $latest) { return $false }
+        $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
+        if (-not $files) { return $false }
+        $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch { return $false }
+}
+
+function Restore-VanillaBackup {
+    param($Cfg)
+    try {
+        $bkDir = Get-MajesticBackupDir -Cfg $Cfg
+        if (-not $bkDir) { return $false }
+        $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
+        $latest = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+        if (-not $latest) { return $false }
+        $files = Get-ChildItem $latest.FullName -Filter '*.bin' -ErrorAction SilentlyContinue
+        if (-not $files) { return $false }
+        $files | Move-Item -Destination $bkDir -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch { return $false }
 }
