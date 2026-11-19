@@ -43,7 +43,7 @@ if (-not $Settings) {
     pause; exit 1
 }
 # source must be valid - otherwise we would "protect" a broken file
-if ((Test-GoldenValid $Settings) -eq $false -and $common) {
+if ($common -and -not (Test-GoldenValid $Settings)) {
     Write-Host '[!] Текущий settings.xml пуст или повреждён - эталон НЕ обновлён.' -ForegroundColor Red
     Write-Host '    Запусти игру один раз, выстави графику, выйди и повтори.'
     pause; exit 1
