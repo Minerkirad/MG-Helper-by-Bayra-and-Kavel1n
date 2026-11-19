@@ -35,7 +35,19 @@ if (-not $Settings) { $Settings = Find-SettingsXml }
 
 if (-not ((Test-Path $Golden) -and (Test-Path $Settings))) {
     Write-Host "[!] golden or settings.xml not found" -ForegroundColor Red
-    Write-Host "    Run 1-install.bat first, or check the paths in $ConfigFile" -ForegroundColor DarkGray
+    Write-Host "    Run MG-Helper.bat -> [1] first, or check the paths in $ConfigFile" -ForegroundColor DarkGray
+    pause; exit 1
+}
+
+# refuse to fight a running game: it holds settings.xml and rewrites it on exit
+$gameProcs = @('GTA5', 'GTA5_Enhanced')
+if (Get-Command Find-MatchingProcess -ErrorAction SilentlyContinue) {
+    $gameRunning = [bool](Find-MatchingProcess -Patterns $gameProcs)
+} else {
+    $gameRunning = [bool](Get-Process -Name $gameProcs -ErrorAction SilentlyContinue)
+}
+if ($gameRunning) {
+    Write-Host "[!] GTA V is running - close the game first, then apply again." -ForegroundColor Red
     pause; exit 1
 }
 
@@ -87,21 +99,35 @@ $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 Copy-Item $Golden (Join-Path $HelperDir "settings.golden.xml.before_maxfps_$stamp") -Force
 Copy-Item $Settings (Join-Path $HelperDir "settings.xml.before_maxfps_$stamp") -Force
 
-$applied = 0
+# phase 1: merge + validate BOTH files before touching anything
+$merged = @{}
 foreach ($file in @($Golden, $Settings)) {
     $s = Get-Content $file -Raw
+    $n = 0
     foreach ($k in $values.Keys) {
         $pattern = "(?<=<$k value=`")[^`"]*(?=`")"
-        if ($s -match $pattern) { $s = [regex]::Replace($s, $pattern, $values[$k]); $applied++ }
+        if ($s -match $pattern) { $s = [regex]::Replace($s, $pattern, $values[$k]); $n++ }
     }
     if ($s -match '\$\d') {
         Write-Host "[!] corrupt merge - aborted, nothing changed" -ForegroundColor Red
         pause; exit 1
     }
-    [IO.File]::WriteAllText($file, $s, [Text.UTF8Encoding]::new($true))
+    $merged[$file] = @{ text = $s; count = $n }
+}
+# phase 2: atomic writes (retry + read-only handling live in Write-Atomic)
+foreach ($file in @($Golden, $Settings)) {
+    $bytes = [Text.UTF8Encoding]::new($true).GetBytes($merged[$file].text)
+    if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
+        if (-not (Write-Atomic -Path $file -Bytes $bytes)) {
+            Write-Host "[!] could not write $file (locked?) - profile NOT fully applied" -ForegroundColor Red
+            pause; exit 1
+        }
+    } else {
+        [IO.File]::WriteAllText($file, $bytes, [Text.UTF8Encoding]::new($true))  # fallback: no common.ps1
+    }
 }
 
-Write-Host "[+] MAX FPS profile applied ($applied values per file)" -ForegroundColor Green
+Write-Host "[+] MAX FPS applied (golden: $($merged[$Golden].count), settings: $($merged[$Settings].count) values)" -ForegroundColor Green
 Write-Host "[+] Backups: settings.golden.xml.before_maxfps_$stamp / settings.xml.before_maxfps_$stamp" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Trade-offs: empty streets, aggressive pop-in, no shadows/fx." -ForegroundColor Yellow
