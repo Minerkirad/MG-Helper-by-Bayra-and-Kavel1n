@@ -100,4 +100,3 @@ if (-not $liveOk) {
 Write-Host "[+] Your personal settings are now the golden ones and applied." -ForegroundColor Green
 Write-Host "[+] Previous golden saved as settings.golden.xml.before_import.bak" -ForegroundColor DarkGray
 Write-Host "[+] The watcher will protect THESE settings at every launch." -ForegroundColor Green
-pause
