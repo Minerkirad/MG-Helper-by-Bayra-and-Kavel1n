@@ -31,4 +31,5 @@ if (Test-Path -LiteralPath $common) {
 }
 
 Write-Host '[+] Watcher остановлен, автозапуск удалён.' -ForegroundColor Green
-Write-Host "    Бэкапы и эталон сохранены в $env:LOCALAPPDATA\MG_Helper"
+$sz = (Get-ChildItem "$env:LOCALAPPDATA\MG_Helper" -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1GB
+Write-Host ("Бэкапы и архивы остались: {0} ({1:N1} ГБ). Удали папку вручную, если не нужны." -f "$env:LOCALAPPDATA\MG_Helper", $sz)
