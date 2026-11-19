@@ -14,12 +14,21 @@ using System.Threading;
 static class Program {
     static int Main(string[] args) {
         string dir    = AppDomain.CurrentDomain.BaseDirectory;
-        string script = args.Length > 0 ? args[0] : Path.Combine(dir, "gta-settings-watcher.ps1");
+        // first non-flag argument is the script (args[0] may be the -Smoke flag)
+        string script = Path.Combine(dir, "gta-settings-watcher.ps1");
+        foreach (var a in args) { if (!a.StartsWith("-")) { script = a; break; } }
         if (!File.Exists(script)) return 2;
 
+        // installer smoke mode: -Smoke bypasses the mutex check so the launchability
+        // test is real even while the watcher already holds the mutex
+        bool smoke = false;
+        foreach (var a in args) if (a == "-Smoke") smoke = true;
+
         // watchdog tick: watcher already owns the mutex -> spawn NOTHING, exit silently
-        Mutex m;
-        if (Mutex.TryOpenExisting(@"Local\MG_Helper_Watcher", out m)) { m.Dispose(); return 0; }
+        if (!smoke) {
+            Mutex m;
+            if (Mutex.TryOpenExisting(@"Local\MG_Helper_Watcher", out m)) { m.Dispose(); return 0; }
+        }
 
         var psi = new ProcessStartInfo();
         psi.FileName  = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
@@ -30,8 +39,12 @@ static class Program {
         psi.CreateNoWindow     = true;   // no console is created at all
         psi.WindowStyle        = ProcessWindowStyle.Hidden;
 
-        var p = Process.Start(psi);
-        p.WaitForExit();                 // task lifetime == watcher lifetime
-        return p.ExitCode;
+        try {
+            var p = Process.Start(psi);
+            p.WaitForExit();                 // task lifetime == watcher lifetime
+            return p.ExitCode;
+        } catch {
+            return 3;   // powershell.exe missing/blocked - no WER dialog, task retries later
+        }
     }
 }
