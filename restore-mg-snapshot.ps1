@@ -89,8 +89,12 @@ foreach ($f in $files) {
     $targetDir = Split-Path $target
     if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Force -Path $targetDir | Out-Null }
     if (Test-Path $target) { Copy-Item $target (Join-Path $preBackup $rel.Replace('\','__')) -Force }
-    Copy-Item $f.FullName $target -Force
-    $restored++
+    try {
+        Copy-Item $f.FullName $target -Force -ErrorAction Stop
+        $restored++
+    } catch {
+        Write-Host "[!] $($f.Name): не удалось восстановить ($($_.Exception.Message))" -ForegroundColor Yellow
+    }
 }
 
 Write-Host ""
