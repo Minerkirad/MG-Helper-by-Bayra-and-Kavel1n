@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '2.0.0'   # держать в синке с version.json
+$script:Version = '2.1.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -570,6 +570,58 @@ function Test-AdoptCandidate {
 # vanilla bins: ensure present in the launcher backup dir
 # (safety net against the error-1002 stuck state)
 # ------------------------------------------------------------
+# ------------------------------------------------------------
+# ROADMAP 2.3: per-variant / per-GPU golden key. The golden belongs to one
+# game variant (GTA V / Enhanced) + one video card; on a mismatch the watcher
+# refuses to auto-apply/adopt and offers the user a fresh Reset instead.
+# ------------------------------------------------------------
+function Test-GoldenKeyMatchPure {
+    # pure tri-state decision (unit-tested):
+    #   $true  - match (or nothing contradicts)
+    #   $false - variant or GPU changed since the key was recorded
+    #   $null  - cannot determine (no key / nothing readable) - be conservative, treat as match
+    param([string]$StoredVariant, [string]$StoredGpu, [string]$CurVariant, [string]$CurGpu)
+    if (-not $StoredVariant -and -not $StoredGpu) { return $null }
+    if (-not $CurVariant -and -not $CurGpu) { return $null }
+    if ($StoredVariant -and $CurVariant -and ($StoredVariant -ne $CurVariant)) { return $false }
+    if ($StoredGpu -and $CurGpu -and ($StoredGpu -ne $CurGpu)) { return $false }
+    return $true
+}
+
+function Get-GoldenKeyInfo {
+    # current machine identity: game variant + video card from the live settings
+    param($Cfg)
+    $variant = $null
+    $gpu = $null
+    try { $g = Find-GtaGameRoot; if ($g) { $variant = $g.variant } } catch {}
+    try {
+        $raw = Get-Content -LiteralPath $Cfg.settingsXml -Raw -ErrorAction Stop
+        $gpu = ([regex]::Match($raw, '<VideoCardDescription>([^<]+)</VideoCardDescription>')).Groups[1].Value
+    } catch {}
+    return @{ variant = $variant; gpu = $gpu }
+}
+
+function Save-GoldenKey {
+    # record the CURRENT machine identity as the golden key (called by install/
+    # reset-settings after a fresh golden is created)
+    param($Cfg)
+    try {
+        $info = Get-GoldenKeyInfo -Cfg $Cfg
+        if (-not $info.variant -or -not $info.gpu) { return $false }
+        $j = @{ variant = $info.variant; gpu = $info.gpu; created = (Get-Date).ToString('o') }
+        [IO.File]::WriteAllText((Join-Path $script:HelperDir 'golden_key.json'), ($j | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        return $true
+    } catch { return $false }
+}
+
+function Get-SavedGoldenKey {
+    try {
+        $f = Join-Path $script:HelperDir 'golden_key.json'
+        if (-not (Test-Path -LiteralPath $f)) { return $null }
+        return (Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json)
+    } catch { return $null }
+}
+
 function Get-WatcherProcess {
     # REVIEW-#9: ONE source of truth for "which processes run the watcher".
     # Excludes this process and -Diagnose runs (diagnose must not be killed by
@@ -859,44 +911,46 @@ function Snapshot-MgFiles {
             }
         }
         if (@($dirs).Count -eq 0) { MLog "[i] MG dirs not found - snapshot skipped"; return }
-        $snapDir = Join-Path $script:HelperDir 'mg_snapshot'
-        New-Item -ItemType Directory -Force -Path $snapDir | Out-Null
+        # ROADMAP 2.4: timestamped GENERATIONS (newest kept = 5). Each generation
+        # is a folder with its own manifest.json - restore offers "MG settings as
+        # of yesterday / the day before" instead of one overwrite-everything dir.
+        $snapRoot = Join-Path $script:HelperDir 'mg_snapshot'
+        $genDir = Join-Path $snapRoot (Get-Date -Format 'yyyy-MM-dd_HHmmss')
+        # stamp collision safety (same-second calls)
+        $uniq = 0
+        while (Test-Path -LiteralPath $genDir) { $uniq++; $genDir = Join-Path $snapRoot ("{0}-{1}" -f (Get-Date -Format 'yyyy-MM-dd_HHmmss'), $uniq) }
+        New-Item -ItemType Directory -Force -Path $genDir | Out-Null
         # manifest maps snapshot file -> original relative path. The legacy '__'
         # flattening is ambiguous if a folder/file name itself contains '__';
         # restore prefers the manifest and falls back to the legacy decode.
         $manifest = [ordered]@{}
-        $rootPrefixes = @{}
         $n = 0
         foreach ($dir in $dirs) {
             $rootFlat = ($dir -replace '[:\\/]', '_')
             foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
                 $name = "$rootFlat`__f$n.json"
                 $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
-                $rootPrefixes[$rootFlat] = $true
-                Copy-Item -LiteralPath $f.FullName (Join-Path $snapDir $name) -Force
+                Copy-Item -LiteralPath $f.FullName (Join-Path $genDir $name) -Force
                 $n++
             }
         }
         if ($n -gt 0) {
             # atomic manifest write: a torn manifest.json must never exist
-            $mf = Join-Path $snapDir 'manifest.json'
+            $mf = Join-Path $genDir 'manifest.json'
             $tmp = "$mf.tmp"
             [IO.File]::WriteAllText($tmp, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
             if (Test-Path -LiteralPath $mf) { [IO.File]::Replace($tmp, $mf, [NullString]::Value) }
             else { Move-Item -LiteralPath $tmp -Destination $mf -Force }
-            # ONLY AFTER the manifest is durable: drop stale files of each snapshotted
-            # root that are not in the fresh manifest (legacy '__' names from old
-            # versions, jsons deleted from MG). Otherwise they resurrect on restore.
-            foreach ($flat in $rootPrefixes.Keys) {
-                Get-ChildItem $snapDir -File -Filter "$flat`__*" -ErrorAction SilentlyContinue |
-                    Where-Object { -not $manifest.Contains($_.Name) } |
-                    ForEach-Object {
-                        # -LiteralPath + try/catch: piped -Path resolves wildcards and
-                        # throws terminating errors under EAP=Stop (same as Copy-Item)
-                        try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue } catch {}
-                    }
-            }
-            MLog "MG snapshot saved ($n files -> $snapDir)"
+            # retention: keep the newest 5 generations (legacy flat files are
+            # untouched - restore still understands them as a fallback)
+            Get-ChildItem $snapRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.json') } |
+                Sort-Object Name -Descending |
+                Select-Object -Skip 5 |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            MLog "MG snapshot generation saved ($n files -> $genDir)"
+        } else {
+            Remove-Item -LiteralPath $genDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     } catch {
         MLog "[!] MG snapshot error: $_"
