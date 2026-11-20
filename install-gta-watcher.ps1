@@ -54,7 +54,8 @@ $deploy = @(
     'common.ps1', 'gta-settings-watcher.ps1', 'MG-Helper.ps1', 'MG-Helper.bat',
     'diagnose.ps1', 'uninstall.ps1', 'repair.ps1', 'reset-settings.ps1',
     'import-settings.ps1', 'clean-majestic-cache.ps1', 'max-fps.ps1', 'cut-shadows.ps1',
-    'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'MG-Helper-Host.cs', 'version.json'
+    'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'MG-Helper-Host.cs', 'MG-Helper-Tray.cs',
+    'update-helper.ps1', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
 # MG-CR-019: staged deployment - everything is copied into a staging folder,
@@ -174,6 +175,7 @@ try { [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop').S
 Start-Sleep -Seconds 7
 # REVIEW-#9: single shared watcher-process filter (excludes -Diagnose too)
 Get-WatcherProcess | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-Process -Name 'MG-Helper-Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 # migration: remove old mechanisms
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue
@@ -280,8 +282,6 @@ for ($w = 0; $w -lt 30; $w++) {
 $alive = @(Get-WatcherProcess -ExcludePid $PID)
 if ($ready -and $alive.Count -gt 0) {
     Write-Host "[+] Watcher v$(Get-PkgVersion) is running and READY (PID $($alive[0].ProcessId))." -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 } elseif ($alive.Count -gt 0) {
     Write-Host "[i] Watcher process is running (PID $($alive[0].ProcessId)) but the READY marker did not appear in 30 s." -ForegroundColor Yellow
     Write-Host "    Check watcher.log - the watcher may still be initialising." -ForegroundColor Yellow
@@ -290,4 +290,41 @@ if ($ready -and $alive.Count -gt 0) {
     Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [8] Diagnose." -ForegroundColor Red
     exit 1
 }
+
+# ------------------------------------------------------------
+# 7. tray icon (ROADMAP 5.1): compiled from readable source at install,
+#    started at logon via a Startup-folder shortcut (no admin, no task).
+# ------------------------------------------------------------
+$trayExe = Join-Path $HelperDir 'MG-Helper-Tray.exe'
+$traySrc = Join-Path $PSScriptRoot 'MG-Helper-Tray.cs'
+$trayOk = $false
+try {
+    # stop a previous tray instance before recompiling over its exe
+    Get-Process -Name 'MG-Helper-Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Add-Type -TypeDefinition ([IO.File]::ReadAllText($traySrc)) `
+        -ReferencedAssemblies @('System.Windows.Forms', 'System.Drawing', 'System.Management') `
+        -OutputAssembly $trayExe -OutputType WindowsApplication -ErrorAction Stop
+    if ((Get-Item -LiteralPath $trayExe).Length -gt 0) { $trayOk = $true }
+    if ($trayOk) { Write-Host '[+] Tray icon compiled.' -ForegroundColor Green }
+} catch {
+    Write-Host "[!] Tray icon compile failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    $trayOk = $false
+}
+if ($trayOk) {
+    try {
+        $ws = New-Object -ComObject WScript.Shell
+        $lnk = $ws.CreateShortcut((Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MG Helper Tray.lnk'))
+        $lnk.TargetPath = $trayExe
+        $lnk.WorkingDirectory = $HelperDir
+        $lnk.Save()
+        Start-Process $trayExe
+        Write-Host '[+] Tray icon started (also launches at logon).' -ForegroundColor Green
+    } catch {
+        Write-Host "[!] Tray startup shortcut failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host '[i] Tray icon unavailable - everything else works; the menu stays the control centre.' -ForegroundColor DarkGray
+}
+Write-Host ""
+Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
 
