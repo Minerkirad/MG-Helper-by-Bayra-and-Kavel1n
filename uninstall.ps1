@@ -25,7 +25,7 @@ if ($left.Count -eq 0) { $results += @{ ok = $true;  msg = 'Watcher остано
 else { $results += @{ ok = $false; msg = "Watcher ВСЁ ЕЩЁ ЗАПУЩЕН ($($left.Count) процессов) - закрой вручную" } }
 
 # tray icon + startup shortcut
-Get-Process -Name 'MG-Helper-Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'MG-Helper-Tray','MGCore' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MG Helper Tray.lnk'
 if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }
 $results += @{ ok = $true;  msg = 'Иконка трея остановлена и убрана из автозагрузки' }
