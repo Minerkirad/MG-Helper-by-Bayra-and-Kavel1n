@@ -320,6 +320,26 @@ if ($wtxt -notmatch 'Invoke-OpReconciliation') { Bad 'watcher: reconciliation no
 foreach ($hf in 'CHANGELOG.md', '.gitattributes', 'PSScriptAnalyzerSettings.psd1') {
     if (-not (Test-Path (Join-Path $repo $hf))) { Bad "repo hygiene: $hf missing" }
 }
+# ROADMAP phase 2-4 guards (v2.2.0)
+if (-not (Test-Path (Join-Path $repo 'MG-Helper-Tray.cs'))) { Bad 'repo: MG-Helper-Tray.cs missing (ROADMAP 5.1)' }
+$trayTxt = Get-Content (Join-Path $repo 'MG-Helper-Tray.cs') -Raw
+foreach ($needle in 'NotifyIcon', 'watcher.ready', 'events.jsonl', 'ShowBalloonTip') {
+    if ($trayTxt -notmatch $needle) { Bad "tray: missing '$needle' (ROADMAP 5.1/3.2)" }
+}
+$instTxt4 = Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw
+foreach ($needle in 'MG-Helper-Tray\.cs', 'MG Helper Tray\.lnk', 'MG-Helper-Tray\.exe') {
+    if ($instTxt4 -notmatch $needle) { Bad "installer: tray piece missing '$needle' (ROADMAP 5.1)" }
+}
+if (-not (Test-Path (Join-Path $repo 'update-helper.ps1'))) { Bad 'repo: update-helper.ps1 missing (ROADMAP 5.2)' }
+$updTxt = Get-Content (Join-Path $repo 'update-helper.ps1') -Raw
+foreach ($needle in 'SHA256', 'Get-FileHash', 'install-gta-watcher\.ps1') {
+    if ($updTxt -notmatch $needle) { Bad "update: missing '$needle' (ROADMAP 5.2)" }
+}
+if ($wtxt -notmatch 'config reloaded') { Bad 'watcher: config reload on heartbeat missing (REVIEW-#7)' }
+$depList = [regex]::Match((Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw), '\$deploy\s*=\s*@\(([^)]*)\)').Groups[1].Value
+foreach ($need in 'MG-Helper-Tray\.cs', 'update-helper\.ps1') {
+    if ($depList -notmatch $need) { Bad "installer deploy list missing $need" }
+}
 # ROADMAP 2.3: golden key pure decision matrix
 if (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' 'GTA V' 'gpuA') { Good 'golden-key: identical setup matches' } else { Bad 'golden-key: identical setup mismatched' }
 if (-not (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' 'GTA V Enhanced' 'gpuA')) { Good 'golden-key: game variant change detected' } else { Bad 'golden-key: variant change missed' }
