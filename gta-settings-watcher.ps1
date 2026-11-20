@@ -42,6 +42,12 @@ function Clean-Dlccache {
         New-Item -ItemType Directory -Force -Path $arc | Out-Null
         # per-file LiteralPath: names with [ ] would break piped -Path resolution
         $files | ForEach-Object { Move-Item -LiteralPath $_.FullName -Destination $arc -Force -ErrorAction SilentlyContinue }
+        # REVIEW-#10: retention - keep the newest 5 generations (opt-in feature,
+        # but the disk must not fill up unnoticed)
+        Get-ChildItem (Join-Path $HelperDir 'dlccache_backup') -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Select-Object -Skip 5 |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Log ("dlccache archived {0} files -> {1}" -f $files.Count, $arc)
     } catch {
         Log "[!] dlccache archive error: $_"
@@ -80,7 +86,9 @@ if ($Diagnose) {
     "Настройки игры:   $sx"
     if ($Golden -and (Test-Path -LiteralPath $Golden)) {
         $g = Get-Content -LiteralPath $Golden -Raw
-        "Эталон валиден:   $($g -match '<Settings>')   повреждён: $($g -match '\$\d')"
+        # REVIEW-#5: real XML validation, not a grep - a torn file with an
+        # opening tag must not be reported as valid
+        "Эталон валиден:   $(Test-GoldenValid $Golden)   повреждён: $($g -match '\$\d')"
         "TextureQuality:   $(([regex]::Match($g, '<TextureQuality value=`"([^`"]+)`"')).Groups[1].Value)"
         "CityDensity:      $(([regex]::Match($g, '<CityDensity value=`"([^`"]+)`"')).Groups[1].Value)"
     }
@@ -241,15 +249,16 @@ try {
 $wasRunning = $false
 if ($state.phase -eq 'InGame') {
     # previous watcher instance died mid-session: adopt without re-snapshot.
-    # PID reuse guard (MG-CR-014): the pid must still belong to a game-like
-    # process; if we recorded the exe path at launch, it must also match
+    # PID reuse guard (MG-CR-014 + REVIEW-#8): the pid must still belong to a
+    # process matching cfg.gameProcesses (works for renamed exes too); if we
+    # recorded the exe path at launch, it must also match
     $gp = Get-Process -Id $state.gamePid -ErrorAction SilentlyContinue
-    $nameOk = $gp -and ($gp.Name -like 'GTA5*' -or $gp.Name -like '*gtav*')
+    $matchOk = @(Find-MatchingProcess -Patterns $cfg.gameProcesses | Where-Object { $_.Id -eq $state.gamePid }).Count -gt 0
     $pathOk = $true
-    if ($nameOk -and $state.gamePath) {
+    if ($matchOk -and $state.gamePath) {
         try { $pathOk = ((Get-Item -LiteralPath $gp.Path -ErrorAction Stop).FullName -eq $state.gamePath) } catch { $pathOk = $false }
     }
-    if ($nameOk -and $pathOk) {
+    if ($matchOk -and $pathOk) {
         $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))"
     } else { $state.phase = 'Idle' }
 }
@@ -375,6 +384,14 @@ while ($true) {
         }
         elseif (-not $running -and $wasRunning) {
             Start-Sleep -Seconds 3
+            # REVIEW-#21: re-check after the wait - the game may have restarted
+            # (crash + auto-relaunch) within these 3 s; then adopt/restore must
+            # NOT run on a file the launcher may already have rewritten
+            if ([bool](Find-MatchingProcess -Patterns $cfg.gameProcesses)) {
+                Log "[i] game is back already - exit handling deferred to the launch branch"
+                $wasRunning = $true
+                continue
+            }
             if ($state.phase -eq 'UnknownSession') {
                 # MG-CR-004: safe mode - no adopt, no restore, no golden writes.
                 # The game that started before us is done; reset and observe fresh.
@@ -396,6 +413,9 @@ while ($true) {
             if ((Test-AdoptCandidate $changedAfterUs ($onExit -eq 'adopt') $same $appliedThisSession) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
                 # adopt: the user's in-game changes become the new golden
                 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
+                # REVIEW-#4: rotate the old golden into .bak - the self-heal chain
+                # references it, so it must actually be maintained
+                Copy-Item -LiteralPath $Golden "$Golden.bak" -Force -ErrorAction SilentlyContinue
                 Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
                 # atomic: a crash mid-copy must not leave a torn golden
                 $adoptBytes = [IO.File]::ReadAllBytes($cfg.settingsXml)
@@ -411,7 +431,11 @@ while ($true) {
             elseif (-not $appliedThisSession) { Log "GTA5 closed -> golden never applied this session - adopt skipped (foreign overwrite?)" }
             elseif (-not $changedAfterUs) { Log "GTA5 closed -> nobody wrote after our apply - golden kept" }
             else { Log "GTA5 closed -> onExit=$onExit - user changes not adopted" }
-            if (-not $adopted -and ($same -eq $false)) {
+            # REVIEW-#3: the exit-restore may only run when WE successfully
+            # applied the golden this session - otherwise (pre-apply backup
+            # failed, apply blocked) restoring here would DESTROY the user's
+            # fresh in-game changes with no backup to recover them from
+            if (-not $adopted -and $appliedThisSession -and ($same -eq $false)) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "GTA5 closed -> golden restored"
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
@@ -422,7 +446,7 @@ while ($true) {
             Restore-VanillaBackup -Cfg $cfg | Out-Null
             # build the 1002 insurance: copy (never move) launcher bins to the
             # archive now that the game is closed - safe from the patcher race
-            if (Archive-VanillaBins -Cfg $cfg) { Log "vanilla bins archived (copy, insurance against error 1002)" }
+            if (Archive-VanillaBins -Cfg $cfg -StopCheck { $stopEvent.WaitOne(0) }) { Log "vanilla bins archived (copy, insurance against error 1002)" }
             Prune-BackupFiles -Pattern 'settings.golden.xml.old_*'
             if ($state.phase -ne 'UnknownSession') {
                 $state.phase = 'Idle'
