@@ -89,6 +89,7 @@ function Show-Menu {
     Write-Host "  [9] Repair              (исправить типовые проблемы)"
     Write-Host "  [10] Удалить всё"
     Write-Host "  [11] Новый эталон       (после смены GPU/обновления игры)"
+    Write-Host "  [12] Проверить обновления (скачать + SHA256 + установить)"
     Write-Host ""
     Write-Host "  [0] Выход"
     Write-Host ""
@@ -131,6 +132,9 @@ while ($true) {
         }
         '11' {
             Run-Step 'Новый эталон (сменилась игра/GPU)' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'reset-settings.ps1') }
+        }
+        '12' {
+            Run-Step 'Проверить обновления' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'update-helper.ps1') }
         }
         '0' { exit 0 }
         default {
