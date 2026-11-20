@@ -610,6 +610,16 @@ while ($true) {
         if (((Get-Date) - $lastBeat).TotalMinutes -ge 30) {
             Log "heartbeat: alive (phase: $($state.phase), settings: $($cfg.settingsXml), guardRollbacks: $([int]$state.guardRollbacks))"
             $lastBeat = Get-Date
+            # REVIEW-#7 / ROADMAP: reload config.json without a watcher restart -
+            # manual edits to onExit/guardWindowSec/etc. take effect here
+            $cfgNew = Get-MgConfig
+            if ($cfgNew.settingsXml) {
+                $cfg = $cfgNew
+                $onExit = if ($cfg.onExit) { [string]$cfg.onExit } else { 'adopt' }
+                $sessionGuard = if ($null -ne $cfg.sessionGuard) { [bool]$cfg.sessionGuard } else { $true }
+                $GuardWindowSec = if ($null -ne $cfg.guardWindowSec) { [int]$cfg.guardWindowSec } else { 120 }
+            }
+            Log "[i] config reloaded (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s)"
             if (([int]$state.restarts -gt 0) -and ((Get-Date) - $lastErrAt).TotalMinutes -ge 30) {
                 $state.restarts = 0; Save-State $state   # healthy 30 min - reset the restart budget
             }
