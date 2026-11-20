@@ -278,6 +278,21 @@ $diaTxt = Get-Content (Join-Path $repo 'diagnose.ps1') -Raw
 if ($diaTxt -notmatch '<USER>') { Bad 'diagnose: report must mask the username by default (MG-CR-011)' }
 $uniTxt = Get-Content (Join-Path $repo 'uninstall.ps1') -Raw
 if ($uniTxt -notmatch 'РЕЗУЛЬТАТ УДАЛЕНИЯ') { Bad 'uninstall: per-action summary missing (MG-CR-012)' }
+# MG-CR-013..022 guards (round 7)
+if ($ctxt -notmatch 'OuterXml -eq \$db\.DocumentElement\.OuterXml') { Bad 'common: Test-SameSettings must do structural XML compare (MG-CR-015)' }
+if ($wtxt -notmatch 'watcher\.ready') { Bad 'watcher: READY handshake marker missing (MG-CR-021)' }
+if ($wtxt -notmatch 'gamePath') { Bad 'watcher: takeover must verify the game exe path (MG-CR-014)' }
+if ($wtxt -notmatch 'state\.json save FAILED') { Bad 'watcher: Save-State failures must be logged (MG-CR-016)' }
+$instTxt3 = Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw
+if ($instTxt3 -notmatch '\.staging-') { Bad 'installer: staged deployment missing (MG-CR-019)' }
+if ($instTxt3 -notmatch 'package_hashes\.txt') { Bad 'installer: SHA256 manifest of deployed files missing (MG-CR-017)' }
+if ($instTxt3 -match 'Write-Host "\[i\] config\.json written[^"]*"[^}]*[\r\n]+\s*}') { }   # ok: inside else
+if ($instTxt3 -notmatch 'READY marker') { Bad 'installer: must wait for the watcher READY marker (MG-CR-021)' }
+foreach ($pf in 'max-fps.ps1', 'cut-shadows.ps1') {
+    $ptxt = Get-Content (Join-Path $repo $pf) -Raw
+    if ($ptxt -notmatch 'ОТКАТ НЕ УДАЛОСЬ ПОДТВЕРДИТЬ') { Bad "${pf}: rollback result must be verified (MG-CR-022)" }
+    if ($ptxt -notmatch 'before the transaction starts') { Bad "${pf}: backup existence must be checked before the transaction (MG-CR-022)" }
+}
 
 # 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
 $vx = Join-Path $sandbox 'valid_settings.xml'
