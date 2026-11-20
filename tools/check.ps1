@@ -320,6 +320,19 @@ if ($wtxt -notmatch 'Invoke-OpReconciliation') { Bad 'watcher: reconciliation no
 foreach ($hf in 'CHANGELOG.md', '.gitattributes', 'PSScriptAnalyzerSettings.psd1') {
     if (-not (Test-Path (Join-Path $repo $hf))) { Bad "repo hygiene: $hf missing" }
 }
+# ROADMAP phase 3-5 completion guards (v2.4.0)
+if (-not (Test-Path (Join-Path $repo 'tests\MGHelper.Tests.ps1'))) { Bad 'repo: Pester suite tests\MGHelper.Tests.ps1 missing (ROADMAP 4.1)' }
+$pesterTxt = Get-Content (Join-Path $repo 'tests\MGHelper.Tests.ps1') -Raw
+if ($pesterTxt -notmatch 'Describe') { Bad 'pester: no Describe blocks' }
+$ciTxt = Get-Content (Join-Path $repo '.github\workflows\ci.yml') -Raw
+foreach ($needle in 'check\.ps1', 'Invoke-Pester', 'PSScriptAnalyzer') {
+    if ($ciTxt -notmatch $needle) { Bad "ci.yml: missing '$needle' (ROADMAP 4.1)" }
+}
+$mgTxt2 = Get-Content (Join-Path $repo 'MG-Helper.ps1') -Raw
+if ($mgTxt2 -notmatch 'Show-Onboarding') { Bad 'menu: onboarding wizard missing (ROADMAP 5.5)' }
+$cfgTxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
+if ($cfgTxt -notmatch 'autoUpdate') { Bad 'common: autoUpdate config flag missing (ROADMAP 5.2)' }
+if ($wtxt -notmatch 'auto-update') { Bad 'watcher: opt-in silent auto-update missing (ROADMAP 5.2)' }
 # ROADMAP phase 2-4 guards (v2.2.0)
 if (-not (Test-Path (Join-Path $repo 'MG-Helper-Tray.cs'))) { Bad 'repo: MG-Helper-Tray.cs missing (ROADMAP 5.1)' }
 $trayTxt = Get-Content (Join-Path $repo 'MG-Helper-Tray.cs') -Raw
