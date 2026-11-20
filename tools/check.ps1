@@ -308,6 +308,16 @@ $uniTxt2 = Get-Content (Join-Path $repo 'uninstall.ps1') -Raw
 if ($uniTxt2 -notmatch 'exit 1') { Bad 'uninstall: must exit 1 when incomplete (REVIEW-#20)' }
 $mgTxt = Get-Content (Join-Path $repo 'MG-Helper.ps1') -Raw
 if ($mgTxt -notmatch 'LASTEXITCODE') { Bad 'menu: uninstall result must be checked (REVIEW-#20)' }
+# ROADMAP phase 1-2 guards
+if ($ctxt -notmatch 'function Start-OpJournal') { Bad 'common: operation journal missing (ROADMAP 2.1)' }
+if ($ctxt -notmatch 'function Invoke-OpReconciliation') { Bad 'common: reconciliation missing (ROADMAP 2.1)' }
+$wtxt = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
+if ($wtxt -notmatch 'events\.jsonl') { Bad 'watcher: structured events.jsonl missing (ROADMAP 3.1)' }
+if ($wtxt -notmatch 'FileSystemWatcher') { Bad 'watcher: FSW hybrid missing (ROADMAP 1.1)' }
+if ($wtxt -notmatch 'Invoke-OpReconciliation') { Bad 'watcher: reconciliation not called at start (ROADMAP 2.1)' }
+foreach ($hf in 'CHANGELOG.md', '.gitattributes', 'PSScriptAnalyzerSettings.psd1') {
+    if (-not (Test-Path (Join-Path $repo $hf))) { Bad "repo hygiene: $hf missing" }
+}
 
 # 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
 $vx = Join-Path $sandbox 'valid_settings.xml'
@@ -371,6 +381,22 @@ if ($st1 -eq 'restored' -and $st2 -eq 'partial') { Good 'bins-ensure: partial st
 $st3 = Ensure-BinsRestored -Cfg @{ majesticJson = $mjPJson }
 if ($st3 -eq 'restored' -and (Test-Path (Join-Path $mjP 'backup\a.bin'))) { Good 'bins-ensure: partial restore continues on the next tick' } else { Bad "bins-ensure: partial never finished (st3=$st3)" }
 $script:HelperDir = $oldBk
+
+# 11q. ROADMAP 2.1: journal + reconciliation rolls the golden back
+$jBak = Join-Path $sandbox 'journal_bak.xml'
+[IO.File]::WriteAllText($jBak, "<?xml version=`"1.0`"?><Settings><journal-bak>" + ('x' * 100) + "</journal-bak></Settings>")
+$goldenPath = Join-Path $script:HelperDir 'settings.golden.xml'
+[IO.File]::WriteAllText($goldenPath, 'TORN-MID-OP')
+Start-OpJournal 'profile-test'
+Set-OpJournalStep 'profile-test' 'backup' 'done' $jBak
+Set-OpJournalStep 'profile-test' 'write-golden' 'done' $goldenPath
+$oldBk2 = $script:HelperDir; $script:HelperDir = $sandbox
+Invoke-OpReconciliation
+$script:HelperDir = $oldBk2
+$jState = (Get-Content (Get-OpJournalPath 'profile-test') -Raw | ConvertFrom-Json).status
+if ((Test-GoldenValid $goldenPath) -and ([IO.File]::ReadAllText($goldenPath) -match '<journal-bak>') -and ($jState -eq 'recovered')) {
+    Good 'journal: reconciliation rolled the golden back and marked the op recovered'
+} else { Bad "journal: reconciliation failed (goldenValid=$(Test-GoldenValid $goldenPath) state=$jState)" }
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
 #     watcher restarts defer during game sessions
