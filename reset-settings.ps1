@@ -63,6 +63,14 @@ if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOn
 
 # MG-CR-008: atomic write + verify the NEW golden before claiming success
 $resetBytes = [IO.File]::ReadAllBytes($Settings)
+# ROADMAP 5.3: diff-preview - show what exactly will change, confirm
+$newText = [Text.UTF8Encoding]::new($true).GetString($resetBytes)
+$oldText = Get-Content $Golden -Raw
+$diffN = Show-SettingsDiff -OldText $oldText -NewText $newText -MaxLines 40
+if ($diffN -eq 0) { Write-Host "[i] Различий с текущим эталоном нет - менять нечего." -ForegroundColor Yellow; Complete-OpJournal 'reset-golden' 'no-changes'; exit 0 }
+Write-Host ("[i] Изменений: " + $diffN)
+$rc = Read-Host "Применить и защитить эти настройки? (да/нет)"
+if ($rc -notmatch '^(д|да|y|yes)$') { Write-Host "Отменено."; Complete-OpJournal 'reset-golden' 'cancelled'; exit 0 }
 $resetOk = $false
 if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
     $resetOk = Write-Atomic -Path $Golden -Bytes $resetBytes
