@@ -24,10 +24,14 @@ static class Program {
         bool smoke = false;
         foreach (var a in args) if (a == "-Smoke") smoke = true;
 
-        // watchdog tick: watcher already owns the mutex -> spawn NOTHING, exit silently
+        // watchdog tick: watcher already owns the mutex -> spawn NOTHING, exit silently.
+        // try/catch: a hostile/broken mutex DACL must not produce a WER dialog
+        // over a fullscreen game - treat as "watcher alive" and exit quietly.
         if (!smoke) {
-            Mutex m;
-            if (Mutex.TryOpenExisting(@"Local\MG_Helper_Watcher", out m)) { m.Dispose(); return 0; }
+            try {
+                Mutex m;
+                if (Mutex.TryOpenExisting(@"Local\MG_Helper_Watcher", out m)) { m.Dispose(); return 0; }
+            } catch { return 0; }
         }
 
         var psi = new ProcessStartInfo();
