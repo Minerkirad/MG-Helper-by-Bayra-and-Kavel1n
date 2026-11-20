@@ -333,6 +333,15 @@ if ($mgTxt2 -notmatch 'Show-Onboarding') { Bad 'menu: onboarding wizard missing 
 $cfgTxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
 if ($cfgTxt -notmatch 'autoUpdate') { Bad 'common: autoUpdate config flag missing (ROADMAP 5.2)' }
 if ($wtxt -notmatch 'auto-update') { Bad 'watcher: opt-in silent auto-update missing (ROADMAP 5.2)' }
+# ROADMAP phase 3 (strangler) guards
+if (-not (Test-Path (Join-Path $repo 'MGCore.cs'))) { Bad 'repo: MGCore.cs missing (ROADMAP phase 3)' }
+$coreTxt = Get-Content (Join-Path $repo 'MGCore.cs') -Raw
+foreach ($needle in 'Local\\\\MG_Helper_Watcher', 'watcher\.ready', 'events\.jsonl', '\.incomplete', 'reconcil') {
+    if ($coreTxt -notmatch $needle) { Bad "MGCore.cs: missing '$needle' (format compat with PS tooling)" }
+}
+$instTxt5 = Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw
+if ($instTxt5 -notmatch 'coreMode') { Bad 'installer: coreMode switch missing (ROADMAP phase 3)' }
+if ($instTxt5 -notmatch 'MGCore\.cs') { Bad 'installer: MGCore.cs not in deploy list' }
 # ROADMAP phase 2-4 guards (v2.2.0)
 if (-not (Test-Path (Join-Path $repo 'MG-Helper-Tray.cs'))) { Bad 'repo: MG-Helper-Tray.cs missing (ROADMAP 5.1)' }
 $trayTxt = Get-Content (Join-Path $repo 'MG-Helper-Tray.cs') -Raw
