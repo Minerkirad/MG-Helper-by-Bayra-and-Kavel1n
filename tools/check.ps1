@@ -281,7 +281,7 @@ if ($diaTxt -notmatch '<USER>') { Bad 'diagnose: report must mask the username b
 $uniTxt = Get-Content (Join-Path $repo 'uninstall.ps1') -Raw
 if ($uniTxt -notmatch 'РЕЗУЛЬТАТ УДАЛЕНИЯ') { Bad 'uninstall: per-action summary missing (MG-CR-012)' }
 # MG-CR-013..022 guards (round 7)
-if ($ctxt -notmatch 'OuterXml -eq \$db\.DocumentElement\.OuterXml') { Bad 'common: Test-SameSettings must do structural XML compare (MG-CR-015)' }
+if ($ctxt -notmatch 'function Get-XmlSignature') { Bad 'common: Test-SameSettings must do structural signature compare (MG-CR-015)' }
 if ($wtxt -notmatch 'watcher\.ready') { Bad 'watcher: READY handshake marker missing (MG-CR-021)' }
 if ($wtxt -notmatch 'gamePath') { Bad 'watcher: takeover must verify the game exe path (MG-CR-014)' }
 if ($wtxt -notmatch 'state\.json save FAILED') { Bad 'watcher: Save-State failures must be logged (MG-CR-016)' }
