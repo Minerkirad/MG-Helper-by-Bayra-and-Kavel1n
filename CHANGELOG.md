@@ -3,6 +3,19 @@
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.3.0] - 2026-11-20
+### Added (ROADMAP 5.3/5.4/6)
+- Diff-preview everywhere: reset/import/profiles/custom-profile show
+  "key: old -> new" and ask for confirmation before touching anything.
+- Golden history / undo: menu [13] lists timestamped backups (validated),
+  restores the picked one, rotates the current golden first.
+- Custom profiles v2: menu [15] saves the current golden as a named profile
+  (`profiles.json`), menu [14] applies it through the same transactional engine
+  (journal + rollback + diff-preview).
+- Error codes MG-E-XXXX in watcher warnings + docs/errors.md.
+- docs/architecture.md (state machine, file formats, races), CONTRIBUTING.md,
+  SECURITY.md.
+
 ## [2.2.0] - 2026-11-20
 ### Added (ROADMAP phase 2-4)
 - Tray icon (net48 WinForms, compiled at install from readable source):
