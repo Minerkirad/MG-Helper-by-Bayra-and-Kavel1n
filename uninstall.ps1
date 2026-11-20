@@ -13,15 +13,14 @@ $results = @()
 
 # 1. cooperative stop
 try { [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop').Set() | Out-Null } catch {}
-Start-Sleep -Seconds 3
+# REVIEW-#19: give the watcher time to notice (it polls every 5 s and may be
+# inside a multi-GB archive copy)
+Start-Sleep -Seconds 7
 
 # 2. fallback: precise kill - never touches this uninstall process
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch '-Diagnose' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Get-WatcherProcess | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
-$left = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch '-Diagnose' })
+$left = @(Get-WatcherProcess)
 if ($left.Count -eq 0) { $results += @{ ok = $true;  msg = 'Watcher остановлен' } }
 else { $results += @{ ok = $false; msg = "Watcher ВСЁ ЕЩЁ ЗАПУЩЕН ($($left.Count) процессов) - закрой вручную" } }
 
@@ -56,3 +55,5 @@ Write-Host '  [OK] Бэкапы и эталон сохранены' -ForegroundC
 if (-not $allOk) { Write-Host '[!] Удаление завершилось НЕ ПОЛНОСТЬЮ - см. пункты с [!] выше.' -ForegroundColor Red }
 $sz = (Get-ChildItem "$env:LOCALAPPDATA\MG_Helper" -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1GB
 Write-Host ("Бэкапы и архивы остались: {0} ({1:N1} ГБ). Удали папку вручную, если не нужны." -f "$env:LOCALAPPDATA\MG_Helper", $sz)
+# REVIEW-#20: honest exit code - the menu relies on it
+if ($allOk) { exit 0 } else { exit 1 }
