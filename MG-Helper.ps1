@@ -88,6 +88,7 @@ function Show-Menu {
     Write-Host "  [8] Диагностика + отчёт (если что-то не работает)"
     Write-Host "  [9] Repair              (исправить типовые проблемы)"
     Write-Host "  [10] Удалить всё"
+    Write-Host "  [11] Новый эталон       (после смены GPU/обновления игры)"
     Write-Host ""
     Write-Host "  [0] Выход"
     Write-Host ""
@@ -127,6 +128,9 @@ while ($true) {
                 Write-Host '[!] Удаление завершилось с ошибками - см. сообщения выше. Программа НЕ удалена полностью.' -ForegroundColor Red
                 Read-Host 'Нажми Enter, чтобы вернуться в меню'
             }
+        }
+        '11' {
+            Run-Step 'Новый эталон (сменилась игра/GPU)' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'reset-settings.ps1') }
         }
         '0' { exit 0 }
         default {
