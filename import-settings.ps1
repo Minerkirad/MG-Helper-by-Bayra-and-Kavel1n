@@ -84,6 +84,13 @@ if ($thisGpu -and $fileGpu -and ($thisGpu -ne $fileGpu)) {
 }
 
 Copy-Item $Golden (Join-Path $HelperDir 'settings.golden.xml.before_import.bak') -Force
+# ROADMAP 5.3: diff-preview - show what exactly will change, confirm
+Write-Host "[i] Изменения относительно текущего эталона:"
+$diffN = Show-SettingsDiff -OldText (Get-Content $Golden -Raw) -NewText $srcText -MaxLines 40
+if ($diffN -eq 0) { Write-Host "[i] Импортируемый файл идентичен текущему эталону - менять нечего." -ForegroundColor Yellow; exit 0 }
+Write-Host ("[i] Изменений: " + $diffN)
+$rc = Read-Host "Применить и защитить эти настройки? (да/нет)"
+if ($rc -notmatch '^(д|да|y|yes)$') { Write-Host "Отменено."; exit 0 }
 # ROADMAP 2.1: journal the operation for crash reconciliation
 Start-OpJournal 'import-golden'
 Set-OpJournalStep 'import-golden' 'backup' 'done' (Join-Path $HelperDir 'settings.golden.xml.before_import.bak')
