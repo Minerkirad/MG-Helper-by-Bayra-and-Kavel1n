@@ -56,7 +56,7 @@ $deploy = @(
     'import-settings.ps1', 'clean-majestic-cache.ps1', 'max-fps.ps1', 'cut-shadows.ps1',
     'restore-mg-snapshot.ps1', 'restore-golden-history.ps1', 'save-custom-profile.ps1',
     'apply-custom-profile.ps1', 'update-helper.ps1', 'install-gta-watcher.ps1',
-    'MG-Helper-Host.cs', 'MG-Helper-Tray.cs', 'version.json'
+    'MG-Helper-Host.cs', 'MG-Helper-Tray.cs', 'MGCore.cs', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
 # MG-CR-019: staged deployment - everything is copied into a staging folder,
@@ -227,6 +227,43 @@ if ($hostExe) {
     $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
 }
 
+# ------------------------------------------------------------
+# ROADMAP phase 3 (strangler): BETA C# core - config "coreMode": "csharp"
+# switches the task from the PS watcher to the compiled MGCore.exe.
+# Default stays 'ps'. Any compile/smoke failure -> automatic PS fallback.
+# ------------------------------------------------------------
+$coreMode = 'ps'
+try {
+    $cfgRaw = Get-Content -LiteralPath (Join-Path $HelperDir 'config.json') -Raw -ErrorAction Stop
+    $m = [regex]::Match($cfgRaw, '"coreMode"\s*:\s*"([^"]+)"')
+    if ($m.Success) { $coreMode = $m.Groups[1].Value }
+} catch { }
+$coreExe = Join-Path $HelperDir 'MGCore.exe'
+$coreSrc = Join-Path $PSScriptRoot 'MGCore.cs'
+$coreOk = $false
+if ($coreMode -eq 'csharp') {
+    try {
+        Add-Type -TypeDefinition ([IO.File]::ReadAllText($coreSrc)) `
+            -ReferencedAssemblies @('System.Web.Extensions','System.Xml') `
+            -OutputAssembly $coreExe -OutputType WindowsApplication -ErrorAction Stop
+        $smokeScript2 = Join-Path $HelperDir 'core_smoke.ps1'
+        Set-Content -LiteralPath $smokeScript2 -Value 'exit 0' -Encoding ASCII
+        $spc = Start-Process $coreExe -ArgumentList '-Smoke', "`"$smokeScript2`"" -PassThru -WindowStyle Hidden
+        if (-not $spc.WaitForExit(20000)) { try { $spc.Kill() } catch {}; throw 'core smoke timeout' }
+        if ($spc.ExitCode -ne 0) { throw "core smoke exit code $($spc.ExitCode)" }
+        Remove-Item -LiteralPath $smokeScript2 -Force -ErrorAction SilentlyContinue
+        Write-Host '[+] MGCore beta compiled and smoke-run OK (coreMode=csharp).' -ForegroundColor Green
+        $coreOk = $true
+    } catch {
+        Write-Host "[!] MGCore beta failed: $($_.Exception.Message) - falling back to the PS watcher." -ForegroundColor Yellow
+        $coreOk = $false
+    }
+}
+if ($coreOk) {
+    $action = New-ScheduledTaskAction -Execute $coreExe -Argument "`"$watcherDst`"" -WorkingDirectory $HelperDir
+    Write-Host '[i] beta C# core ACTIVE - feedback welcome via Issues.' -ForegroundColor Green
+}
+
 $tLogon  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
 $set     = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
@@ -280,11 +317,15 @@ for ($w = 0; $w -lt 30; $w++) {
     Start-Sleep -Seconds 1
     if (Test-Path -LiteralPath $readyFile) { $ready = $true; break }
 }
+# the active core may be MGCore.exe (no powershell process) - the READY marker
+# is the source of truth; PS-process check is only a bonus for the PS core
 $alive = @(Get-WatcherProcess -ExcludePid $PID)
-if ($ready -and $alive.Count -gt 0) {
-    Write-Host "[+] Watcher v$(Get-PkgVersion) is running and READY (PID $($alive[0].ProcessId))." -ForegroundColor Green
+$alive += @(Get-Process -Name 'MGCore' -ErrorAction SilentlyContinue)
+if ($ready) {
+    $pidTxt = if ($alive.Count -gt 0) { " (PID $($alive[0].Id))" } else { "" }
+    Write-Host "[+] Watcher v$(Get-PkgVersion) is running and READY$pidTxt." -ForegroundColor Green
 } elseif ($alive.Count -gt 0) {
-    Write-Host "[i] Watcher process is running (PID $($alive[0].ProcessId)) but the READY marker did not appear in 30 s." -ForegroundColor Yellow
+    Write-Host "[i] Watcher process is running but the READY marker did not appear in 30 s." -ForegroundColor Yellow
     Write-Host "    Check watcher.log - the watcher may still be initialising." -ForegroundColor Yellow
     exit 1
 } else {
