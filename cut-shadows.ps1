@@ -77,6 +77,14 @@ foreach ($file in @($Golden, $Settings)) {
     $merged[$file] = @{ text = $s; count = $n }
 }
 # phase 2: atomic writes.
+# ROADMAP 5.3: diff-preview per file + confirm before touching anything
+Write-Host "[i] Изменения по файлам:"
+$diffG = Show-SettingsDiff -OldText (Get-Content $Golden -Raw) -NewText $merged[$Golden].text -MaxLines 40
+$diffS = Show-SettingsDiff -OldText (Get-Content $Settings -Raw) -NewText $merged[$Settings].text -MaxLines 40
+if (($diffG -eq 0) -and ($diffS -eq 0)) { Write-Host "[i] Ни одного реального изменения - применять нечего." -ForegroundColor Yellow; exit 0 }
+$rc = Read-Host "Применить этот профиль? (да/нет)"
+if ($rc -notmatch '^(д|да|y|yes)$') { Write-Host "Отменено."; exit 0 }
+
 # MG-CR-009 + MG-CR-022: transactional - golden written FIRST, live second;
 # if the live write fails, the golden is rolled back from its backup AND the
 # rollback itself is verified before claiming anything. Backups must exist
