@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '2.2.0'   # держать в синке с version.json
+$script:Version = '2.3.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -620,6 +620,37 @@ function Get-SavedGoldenKey {
         if (-not (Test-Path -LiteralPath $f)) { return $null }
         return (Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json)
     } catch { return $null }
+}
+
+# ------------------------------------------------------------
+# ROADMAP 5.3: diff-preview - show "key: old -> new" BEFORE destructive ops
+# ------------------------------------------------------------
+function Get-SettingsKeyValues {
+    # key -> value map of a settings.xml TEXT (see unit tests in tools/check.ps1)
+    param([string]$XmlText)
+    $res = @{}
+    foreach ($m in [regex]::Matches($XmlText, '<(\w+) value="([^"]*)"')) { $res[$m.Groups[1].Value] = $m.Groups[2].Value }
+    return $res
+}
+
+function Show-SettingsDiff {
+    # prints "key: old -> new" for changed values; returns the change count
+    param([string]$OldText, [string]$NewText, [int]$MaxLines = 40)
+    $old = Get-SettingsKeyValues -XmlText $OldText
+    $new = Get-SettingsKeyValues -XmlText $NewText
+    $changes = 0
+    foreach ($k in $new.Keys) {
+        if (-not $old.ContainsKey($k) -or ($old[$k] -ne $new[$k])) {
+            $changes++
+            if ($changes -le $MaxLines) {
+                $o = if ($old.ContainsKey($k)) { $old[$k] } else { '(absent)' }
+                Write-Host ("  {0}: {1} -> {2}" -f $k, $o, $new[$k])
+            }
+        }
+    }
+    foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $changes++ } }
+    if ($changes -gt $MaxLines) { Write-Host ("  ... ещё {0} изменений" -f ($changes - $MaxLines)) }
+    return $changes
 }
 
 function Get-WatcherProcess {
