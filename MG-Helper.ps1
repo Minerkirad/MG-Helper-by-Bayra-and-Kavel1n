@@ -90,6 +90,9 @@ function Show-Menu {
     Write-Host "  [10] Удалить всё"
     Write-Host "  [11] Новый эталон       (после смены GPU/обновления игры)"
     Write-Host "  [12] Проверить обновления (скачать + SHA256 + установить)"
+    Write-Host "  [13] История эталона    (undo - вернуть прошлую версию)"
+    Write-Host "  [14] Применить свой профиль"
+    Write-Host "  [15] Сохранить текущие как профиль"
     Write-Host ""
     Write-Host "  [0] Выход"
     Write-Host ""
@@ -135,6 +138,15 @@ while ($true) {
         }
         '12' {
             Run-Step 'Проверить обновления' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'update-helper.ps1') }
+        }
+        '13' {
+            Run-Step 'История эталона (undo)' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'restore-golden-history.ps1') }
+        }
+        '14' {
+            Run-Step 'Применить свой профиль' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'apply-custom-profile.ps1') }
+        }
+        '15' {
+            Run-Step 'Сохранить текущие как профиль' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'save-custom-profile.ps1') }
         }
         '0' { exit 0 }
         default {
