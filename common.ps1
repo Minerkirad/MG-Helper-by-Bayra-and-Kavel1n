@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.9.1'   # держать в синке с version.json
+$script:Version = '2.0.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -755,6 +755,91 @@ function Prune-BackupFiles {
             Select-Object -Skip $Keep |
             Remove-Item -Force -ErrorAction SilentlyContinue
     } catch {}
+}
+
+function Get-OpJournalPath {
+    param([string]$Name)
+    Join-Path $script:HelperDir ("journal_{0}.json" -f $Name)
+}
+
+function Start-OpJournal {
+    # ROADMAP 2.1: record a multi-file operation so a crash/kill mid-way can
+    # be reconciled at watcher start (golden rolled back from the recorded backup)
+    param([string]$Name)
+    try {
+        $j = @{ op = $Name; status = 'running'; started = (Get-Date).ToString('o'); steps = @() }
+        [IO.File]::WriteAllText((Get-OpJournalPath $Name), ($j | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
+function Set-OpJournalStep {
+    param([string]$Name, [string]$Step, [string]$Status = 'done', [string]$Path = '')
+    try {
+        $f = Get-OpJournalPath $Name
+        $j = Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json
+        $steps = @($j.steps)
+        $found = $false
+        foreach ($s in $steps) { if ($s.step -eq $Step) { $s.status = $Status; $s.path = $Path; $found = $true } }
+        if (-not $found) { $steps += @{ step = $Step; status = $Status; path = $Path } }
+        $j.steps = $steps
+        [IO.File]::WriteAllText($f, ($j | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
+function Complete-OpJournal {
+    param([string]$Name, [string]$Status = 'done')
+    try {
+        $f = Get-OpJournalPath $Name
+        $j = Get-Content -LiteralPath $f -Raw -ErrorAction Stop | ConvertFrom-Json
+        $j.status = $Status
+        [IO.File]::WriteAllText($f, ($j | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
+function Invoke-OpReconciliation {
+    # called at watcher start: a journal left in 'running' means the process
+    # died mid-operation -> restore the golden from the recorded backup, clean
+    # torn artifacts (.incomplete generations, stale tmp files)
+    param([scriptblock]$Logger = $null)
+    function L($m) { if ($Logger) { & $Logger $m } }
+    try {
+        Get-ChildItem (Join-Path $script:HelperDir 'vanilla_backup_archive') -Directory -Filter '*.incomplete' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $script:HelperDir -Filter '*.mgtmp' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        $goldenPath = Join-Path $script:HelperDir 'settings.golden.xml'
+        Get-ChildItem -LiteralPath $script:HelperDir -Filter 'journal_*.json' -File -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                $j = Get-Content -LiteralPath $_.FullName -Raw -ErrorAction Stop | ConvertFrom-Json
+                if ($j.status -ne 'running') { return }
+                $goldenDone = $false
+                $bakPath = $null
+                foreach ($st in @($j.steps)) {
+                    if ($st.step -eq 'write-golden' -and $st.status -eq 'done') { $goldenDone = $true }
+                    if ($st.step -eq 'backup' -and $st.status -eq 'done' -and $st.path) { $bakPath = $st.path }
+                }
+                if ($goldenDone -and $bakPath -and (Test-Path -LiteralPath $bakPath)) {
+                    # the golden was written but the op never finished -> roll back
+                    $rBytes = [IO.File]::ReadAllBytes($bakPath)
+                    if (Write-Atomic -Path $goldenPath -Bytes $rBytes) {
+                        L "[i] reconciliation: op '$($j.op)' rolled the golden back from $bakPath"
+                    } else {
+                        L "[!] reconciliation: could not roll the golden back from $bakPath - restore manually"
+                    }
+                } elseif ($goldenDone) {
+                    L "[!] reconciliation: op '$($j.op)' died after writing the golden and no backup is recorded"
+                } else {
+                    L "[i] reconciliation: op '$($j.op)' died before any golden write - nothing to undo"
+                }
+                $j.status = 'recovered'
+                [IO.File]::WriteAllText($_.FullName, ($j | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+            } catch {
+                L "[!] reconciliation: could not process $($_.Name): $_"
+            }
+        }
+    } catch {
+        L "[!] reconciliation error: $_"
+    }
 }
 
 function Snapshot-MgFiles {
