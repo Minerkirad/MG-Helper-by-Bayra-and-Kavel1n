@@ -24,6 +24,12 @@ $left = @(Get-WatcherProcess)
 if ($left.Count -eq 0) { $results += @{ ok = $true;  msg = 'Watcher остановлен' } }
 else { $results += @{ ok = $false; msg = "Watcher ВСЁ ЕЩЁ ЗАПУЩЕН ($($left.Count) процессов) - закрой вручную" } }
 
+# tray icon + startup shortcut
+Get-Process -Name 'MG-Helper-Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MG Helper Tray.lnk'
+if (Test-Path -LiteralPath $lnk) { Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue }
+$results += @{ ok = $true;  msg = 'Иконка трея остановлена и убрана из автозагрузки' }
+
 # 3. autostart: scheduled task + legacy mechanisms
 schtasks /Delete /TN 'MG_Helper_Watcher' /F 2>&1 | Out-Null
 schtasks /Delete /TN 'MG_Helper_Watchdog' /F 2>&1 | Out-Null
