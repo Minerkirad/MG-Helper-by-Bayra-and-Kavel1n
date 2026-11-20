@@ -56,6 +56,9 @@ if (Get-Process -Name 'GTA5','GTA5_Enhanced' -ErrorAction SilentlyContinue) {
 
 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
 Copy-Item $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force
+# ROADMAP 2.1: journal the operation for crash reconciliation
+Start-OpJournal 'reset-golden'
+Set-OpJournalStep 'reset-golden' 'backup' 'done' (Join-Path $HelperDir "settings.golden.xml.old_$stamp")
 if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
 
 # MG-CR-008: atomic write + verify the NEW golden before claiming success
@@ -67,14 +70,18 @@ if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
     try { [IO.File]::WriteAllBytes($Golden, $resetBytes); $resetOk = $true } catch { $resetOk = $false }
 }
 if (-not $resetOk) {
+    Complete-OpJournal 'reset-golden' 'failed'
     Write-Host "[!] Не удалось записать эталон (файл заблокирован?) - эталон НЕ изменён, старая копия: settings.golden.xml.old_$stamp" -ForegroundColor Red
     exit 1
 }
+Set-OpJournalStep 'reset-golden' 'write-golden' 'done' $Golden
 if ($common -and -not (Test-GoldenValid $Golden)) {
+    Complete-OpJournal 'reset-golden' 'failed'
     Write-Host "[!] Новый эталон не прошёл проверку после записи - восстановлена прежняя копия." -ForegroundColor Red
     Copy-Item (Join-Path $HelperDir "settings.golden.xml.old_$stamp") $Golden -Force
     exit 1
 }
+Complete-OpJournal 'reset-golden' 'done'
 
 $raw = Get-Content $Golden -Raw
 $tq = [regex]::Match($raw, '<TextureQuality value="([^"]+)"').Groups[1].Value
