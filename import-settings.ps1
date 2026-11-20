@@ -84,17 +84,23 @@ if ($thisGpu -and $fileGpu -and ($thisGpu -ne $fileGpu)) {
 }
 
 Copy-Item $Golden (Join-Path $HelperDir 'settings.golden.xml.before_import.bak') -Force
+# ROADMAP 2.1: journal the operation for crash reconciliation
+Start-OpJournal 'import-golden'
+Set-OpJournalStep 'import-golden' 'backup' 'done' (Join-Path $HelperDir 'settings.golden.xml.before_import.bak')
 $bytes = [Text.UTF8Encoding]::new($true).GetBytes($srcText)
 $liveOk = $true
 if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
     if (-not (Write-Atomic -Path $Golden -Bytes $bytes)) {
+        Complete-OpJournal 'import-golden' 'failed'
         Write-Host "[!] could not write golden (locked?) - aborted, nothing changed." -ForegroundColor Red
         exit 1
     }
+    Set-OpJournalStep 'import-golden' 'write-golden' 'done' $Golden
     $liveOk = Write-Atomic -Path $Settings -Bytes $bytes   # Write-Atomic clears read-only itself
 } else {
     if ((Get-Item $Settings).IsReadOnly) { Set-ItemProperty $Settings -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue }
     [IO.File]::WriteAllText($Golden, $srcText, [Text.UTF8Encoding]::new($true))
+    Set-OpJournalStep 'import-golden' 'write-golden' 'done' $Golden
     [IO.File]::WriteAllText($Settings, $srcText, [Text.UTF8Encoding]::new($true))
 }
 if (-not $liveOk) {
@@ -102,10 +108,12 @@ if (-not $liveOk) {
 }
 # REVIEW-#5: verify the new golden after the write (same as reset-settings)
 if ($common -and -not (Test-GoldenValid $Golden)) {
+    Complete-OpJournal 'import-golden' 'failed'
     Write-Host "[!] Новый эталон не прошёл проверку - восстанавливаю прежний из before_import.bak." -ForegroundColor Red
     Copy-Item (Join-Path $HelperDir 'settings.golden.xml.before_import.bak') $Golden -Force
     exit 1
 }
+Complete-OpJournal 'import-golden' 'done'
 
 Write-Host "[+] Your personal settings are now the golden ones and applied." -ForegroundColor Green
 Write-Host "[+] Previous golden saved as settings.golden.xml.before_import.bak" -ForegroundColor DarkGray
