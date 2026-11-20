@@ -160,6 +160,8 @@ if (-not (Save-MgConfig $cfg)) {
 } else {
     Write-Host "[i] config.json written (discovered paths are cached there)." -ForegroundColor DarkGray
 }
+# ROADMAP 2.3: record the machine identity for the golden key
+if (Save-GoldenKey -Cfg $cfg) { Write-Host '[i] golden key recorded (variant + GPU).' -ForegroundColor DarkGray }
 
 # ------------------------------------------------------------
 # 5. autostart: one scheduled task (logon + 10-min repeat), mutex-protected
