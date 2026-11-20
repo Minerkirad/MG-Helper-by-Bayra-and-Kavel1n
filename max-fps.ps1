@@ -120,8 +120,16 @@ foreach ($file in @($Golden, $Settings)) {
     $merged[$file] = @{ text = $s; count = $n }
 }
 # phase 2: atomic writes (retry + read-only handling live in Write-Atomic).
-# MG-CR-009: transactional - order is golden THEN live; if the live write
-# fails, the golden is rolled back from its backup (files never diverge).
+# MG-CR-009 + MG-CR-022: transactional - golden written FIRST, live second;
+# if the live write fails, the golden is rolled back from its backup AND the
+# rollback itself is verified before claiming anything. Backups must exist
+# BEFORE the transaction starts.
+$bkGoldenPath = Join-Path $HelperDir "settings.golden.xml.before_maxfps_$stamp"
+$bkLivePath = Join-Path $HelperDir "settings.xml.before_maxfps_$stamp"
+if (-not ((Test-Path -LiteralPath $bkGoldenPath) -and (Test-Path -LiteralPath $bkLivePath))) {
+    Write-Host "[!] резервные копии не созданы - отмена, ничего не изменено." -ForegroundColor Red
+    exit 1
+}
 $goldenWritten = $false
 foreach ($file in @($Golden, $Settings)) {
     $bytes = [Text.UTF8Encoding]::new($true).GetBytes($merged[$file].text)
@@ -134,10 +142,15 @@ foreach ($file in @($Golden, $Settings)) {
     if (-not $wok) {
         Write-Host "[!] could not write $file (locked?)" -ForegroundColor Red
         if ($goldenWritten) {
-            $rBytes = [IO.File]::ReadAllBytes((Join-Path $HelperDir "settings.golden.xml.before_maxfps_$stamp"))
-            if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) { $null = Write-Atomic -Path $Golden -Bytes $rBytes }
-            else { [IO.File]::WriteAllBytes($Golden, $rBytes) }
-            Write-Host "[!] golden ROLLED BACK from backup - nothing changed." -ForegroundColor Yellow
+            $rBytes = [IO.File]::ReadAllBytes($bkGoldenPath)
+            $rOk = $false
+            if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) { $rOk = Write-Atomic -Path $Golden -Bytes $rBytes }
+            else { try { [IO.File]::WriteAllBytes($Golden, $rBytes); $rOk = $true } catch { $rOk = $false } }
+            # MG-CR-022: verify the rollback by re-reading, then report honestly
+            $rVerify = $false
+            try { $rVerify = (([IO.File]::ReadAllBytes($Golden)) -join ',') -eq ($rBytes -join ',') } catch { $rVerify = $false }
+            if ($rOk -and $rVerify) { Write-Host "[!] golden ROLLED BACK from backup - nothing changed." -ForegroundColor Yellow }
+            else { Write-Host "[!] ОТКАТ НЕ УДАЛОСЬ ПОДТВЕРДИТЬ - эталон может содержать новый профиль. Восстанови вручную из $bkGoldenPath" -ForegroundColor Red }
         } else {
             Write-Host "[!] nothing was modified yet - aborting." -ForegroundColor Yellow
         }
