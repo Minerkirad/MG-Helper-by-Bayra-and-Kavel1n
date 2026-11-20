@@ -3,6 +3,27 @@
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.2.0] - 2026-11-20
+### Added (ROADMAP phase 2-4)
+- Tray icon (net48 WinForms, compiled at install from readable source):
+  status tooltip from the watcher's own files (no IPC races), balloon
+  notifications on golden.applied / adopt / guard.rollback / insurance /
+  golden.mismatch / errors, action menu (menu, diagnostics, profiles,
+  restore, update), launched at logon via Startup-folder shortcut.
+- Opt-in auto-update (ROADMAP 5.2): menu [12] downloads the latest release,
+  verifies SHA256 against the hash published in the release notes, stages and
+  runs the installer; any failure keeps the previous install intact.
+- config.json reload on every heartbeat (30 min) - manual edits no longer
+  require a watcher restart (REVIEW-#7).
+
+## [2.1.0] - 2026-11-20
+### Added (ROADMAP 2.3 + 2.4)
+- Per-variant/per-GPU golden key: mismatch (game update to Enhanced, GPU
+  change) -> SAFE MODE + menu [11] one-click new golden; diagnose shows key status.
+- MG snapshot generations (newest 5, per-gen manifest); restore offers a
+  generation picker; pre-restore backup names unique; traversal guard;
+  MG-running check.
+
 ## [2.0.0] - 2026-11-20
 ### Added (ROADMAP phase 1-2, partial)
 - Operation journal + reconciliation at watcher start: multi-file operations
