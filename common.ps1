@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '2.3.0'   # держать в синке с version.json
+$script:Version = '2.4.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -41,6 +41,7 @@ function Get-MgConfig {
         launcherProcesses = @('Majestic', 'MajesticLauncher', 'majestic-launcher')
         mgProcesses       = @('Miami', 'MiamiGraphics')
         autoCleanDlccache = $false
+        autoUpdate        = $false
         onExit            = 'adopt'
         sessionGuard      = $true
         guardWindowSec    = 120
