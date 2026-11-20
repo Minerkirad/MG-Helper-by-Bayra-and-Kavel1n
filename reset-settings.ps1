@@ -82,6 +82,8 @@ if ($common -and -not (Test-GoldenValid $Golden)) {
     exit 1
 }
 Complete-OpJournal 'reset-golden' 'done'
+# ROADMAP 2.3: re-record the machine identity with the fresh golden
+$null = Save-GoldenKey -Cfg @{ settingsXml = $Golden }
 
 $raw = Get-Content $Golden -Raw
 $tq = [regex]::Match($raw, '<TextureQuality value="([^"]+)"').Groups[1].Value
