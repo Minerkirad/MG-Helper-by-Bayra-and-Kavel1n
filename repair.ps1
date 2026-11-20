@@ -29,10 +29,10 @@ $gSrc = $null
 $chain = @($Golden, "$Golden.bak", (Join-Path $HelperDir 'settings.before_apply.bak'), $cfg0.settingsXml) |
     Where-Object { $_ } | Select-Object -Unique
 foreach ($c in $chain) {
-    try {
-        $raw = Get-Content -LiteralPath $c -Raw -ErrorAction Stop
-        if ($raw.Length -gt 100 -and $raw -match '<Settings>' -and ($raw -notmatch '\$\d')) { $gSrc = $c; break }
-    } catch {}
+    # REVIEW-#5: real XML validation instead of a grep - a torn file with an
+    # opening tag must not pass (length>100 checked via Test-GoldenValid for
+    # golden files, Test-ValidSettingsXml for the rest)
+    if ((Test-Path -LiteralPath $c) -and (Test-ValidSettingsXml -Path $c) -and ((Get-Item -LiteralPath $c).Length -gt 100)) { $gSrc = $c; break }
 }
 if ($gSrc -and ($gSrc -ne $Golden)) {
     # MG-CR-010: healing from the LIVE settings.xml may replace the golden the
@@ -83,12 +83,17 @@ if (-not (Test-Path -LiteralPath $installer)) {
 '' | powershell -NoProfile -ExecutionPolicy Bypass -File $installer 2>&1 | ForEach-Object { Write-Host "  $_" }
 
 # --- 4. verify watcher process is alive after installer restart ---
-Start-Sleep 4
-# precise pattern + exclude ourselves: 'MG_Helper' matched ANY script running
-# from the helper dir (incl. this repair), producing a fake "watcher is alive"
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { ($_.ProcessId -ne $PID) -and ($_.CommandLine -match 'gta-settings-watcher\.ps1') })
-if ($alive.Count -gt 0) { $results += @{ ok = $true;  msg = "Наблюдатель перезапущен (PID $($alive[0].ProcessId))" } }
+# REVIEW-#21 (installer part): wait for the READY marker, not just a process
+$readyFile = Join-Path $HelperDir 'watcher.ready'
+$ready = $false
+for ($w = 0; $w -lt 30; $w++) {
+    Start-Sleep -Seconds 1
+    $alive = @(Get-WatcherProcess)
+    if ($alive.Count -gt 0 -and (Test-Path -LiteralPath $readyFile)) { $ready = $true; break }
+}
+if (-not $ready) { Start-Sleep -Seconds 2; $alive = @(Get-WatcherProcess) }
+if ($ready) { $results += @{ ok = $true;  msg = "Наблюдатель перезапущен и ГОТОВ (PID $($alive[0].ProcessId))" } }
+elseif ($alive.Count -gt 0) { $results += @{ ok = $false; msg = "Наблюдатель запущен, но маркер READY не появился за 30 с - смотри watcher.log" } }
 else { $results += @{ ok = $false; msg = "Наблюдатель не запустился - пришли отчёт из Диагностики" } }
 
 # --- 5. vanilla .bin restore (optional, with confirmation) ---
