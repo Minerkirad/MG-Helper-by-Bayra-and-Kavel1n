@@ -63,7 +63,11 @@ if ($gameRunning) {
 }
 
 $srcText = Get-Content $Src -Raw   # NOT $src: PowerShell is case-insensitive, $Src is the PATH
-if (-not ($srcText -match '<Settings>') -or ($srcText -match '\$\d')) {
+# REVIEW-#5: real XML validation instead of a grep
+[IO.File]::WriteAllText("$Src.importcheck", $srcText, [Text.UTF8Encoding]::new($false))
+$srcValid = Test-ValidSettingsXml -Path "$Src.importcheck"
+Remove-Item -LiteralPath "$Src.importcheck" -Force -ErrorAction SilentlyContinue
+if (-not $srcValid) {
     Write-Host "[!] The provided settings.xml is not valid - aborted, nothing changed." -ForegroundColor Red
     exit 1
 }
@@ -95,6 +99,12 @@ if (Get-Command Write-Atomic -ErrorAction SilentlyContinue) {
 }
 if (-not $liveOk) {
     Write-Host "[!] golden updated, but live settings.xml is locked - the watcher applies it at next launch." -ForegroundColor Yellow
+}
+# REVIEW-#5: verify the new golden after the write (same as reset-settings)
+if ($common -and -not (Test-GoldenValid $Golden)) {
+    Write-Host "[!] Новый эталон не прошёл проверку - восстанавливаю прежний из before_import.bak." -ForegroundColor Red
+    Copy-Item (Join-Path $HelperDir 'settings.golden.xml.before_import.bak') $Golden -Force
+    exit 1
 }
 
 Write-Host "[+] Your personal settings are now the golden ones and applied." -ForegroundColor Green
