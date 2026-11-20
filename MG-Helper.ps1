@@ -59,6 +59,7 @@ function Show-Menu {
     # status header
     $cfg = Resolve-MgPaths -NoSave
     $installed = Test-Path (Join-Path $HelperDir 'gta-settings-watcher.ps1')
+    $script:menuInstalled = $installed
     $watchAlive = @(Get-WatcherProcess -ExcludePid $PID).Count -gt 0
     $mgOk = $cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $cfg.miamiGraphicsDir)
     $sxOk = $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)
@@ -98,8 +99,44 @@ function Show-Menu {
     Write-Host ""
 }
 
+# ROADMAP 5.5: onboarding wizard - shown ONCE on the first run before install
+function Show-Onboarding {
+    Clear-Host
+    Write-Host "==========================================================" -ForegroundColor Cyan
+    Write-Host "  Первый запуск MG Helper - быстрый мастер" -ForegroundColor Cyan
+    Write-Host "==========================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Как это работает (одна картинка словами):"
+    Write-Host "    1. Первые 2 минуты после старта игры - ЗАЩИТА: чужие"
+    Write-Host "       перезаписи настроек откатываются к твоему эталону."
+    Write-Host "    2. Дальше - твои изменения: меняй графику как хочешь."
+    Write-Host "    3. При выходе из игры: изменения сохраняются как новый"
+    Write-Host "       эталон (adopt). Никто ничего не затирает молча."
+    Write-Host ""
+    $components = @()
+    if ($cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)) { $components += "settings.xml найден" } else { $components += "settings.xml НЕ найден" }
+    if ($cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $cfg.miamiGraphicsDir)) { $components += "Miami Graphics найден" } else { $components += "Miami Graphics не найден" }
+    Write-Host "  Обнаружено на этом ПК:"
+    foreach ($c in $components) { Write-Host "    - $c" }
+    Write-Host ""
+    $ans = Read-Host "Установить защиту сейчас? (да/нет)"
+    if ($ans -match '^(д|да|y|yes)$') {
+        Run-Step "Установка" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'install-gta-watcher.ps1') }
+        Write-Host "  Готово! Дальше просто играй. Иконка в трее покажет статус." -ForegroundColor Green
+        Write-Host "  Если сменишь видеокарту или игру обновят - меню [11]." -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Мастер закрыт. Установить позже - пункт [1]." -ForegroundColor DarkGray
+    }
+}
+$script:onboardingShown = $false
+
 while ($true) {
     Show-Menu
+    if (-not $script:menuInstalled -and (-not $script:onboardingShown)) {
+        $script:onboardingShown = $true
+        Show-Onboarding
+        Show-Menu
+    }
     $choice = Read-Host "Выбери пункт"
     switch ($choice) {
         '1' { Run-Step "Установка" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'install-gta-watcher.ps1') } }
@@ -148,6 +185,7 @@ while ($true) {
         '15' {
             Run-Step 'Сохранить текущие как профиль' { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'save-custom-profile.ps1') }
         }
+        '0' { exit 0 }
         '0' { exit 0 }
         default {
             Write-Host "Нет такого пункта. Введи цифру 0-10." -ForegroundColor Yellow
