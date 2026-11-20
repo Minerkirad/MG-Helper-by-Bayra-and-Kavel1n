@@ -59,8 +59,7 @@ function Show-Menu {
     # status header
     $cfg = Resolve-MgPaths -NoSave
     $installed = Test-Path (Join-Path $HelperDir 'gta-settings-watcher.ps1')
-    $watchAlive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-        Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.CommandLine -notmatch '-Diagnose' }).Count -gt 0
+    $watchAlive = @(Get-WatcherProcess -ExcludePid $PID).Count -gt 0
     $mgOk = $cfg.miamiGraphicsDir -and (Test-Path -LiteralPath $cfg.miamiGraphicsDir)
     $sxOk = $cfg.settingsXml -and (Test-Path -LiteralPath $cfg.settingsXml)
 
@@ -118,10 +117,15 @@ while ($true) {
         '10' {
             if (Confirm-It 'Удалить watcher и автозапуск? Бэкапы и эталон останутся.') {
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'uninstall.ps1')
-                Write-Host ''
-                Write-Host 'Удалено. Эту папку можно удалить.'
-                Read-Host 'Нажми Enter для выхода'
-                exit 0
+                # REVIEW-#20: never claim success when the uninstall failed
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host ''
+                    Write-Host 'Удалено. Эту папку можно удалить.'
+                    Read-Host 'Нажми Enter для выхода'
+                    exit 0
+                }
+                Write-Host '[!] Удаление завершилось с ошибками - см. сообщения выше. Программа НЕ удалена полностью.' -ForegroundColor Red
+                Read-Host 'Нажми Enter, чтобы вернуться в меню'
             }
         }
         '0' { exit 0 }
