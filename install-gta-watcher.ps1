@@ -167,10 +167,11 @@ if (-not (Save-MgConfig $cfg)) {
 $watcherDst = Join-Path $HelperDir 'gta-settings-watcher.ps1'
 # cooperative stop, then precise kill - never touches this installer or the menu
 try { [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop').Set() | Out-Null } catch {}
-Start-Sleep -Seconds 2
-Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+# REVIEW-#19: the watcher can be inside a multi-GB copy that ignores nothing -
+# give it time to notice the stop event (its loop polls every 5 s)
+Start-Sleep -Seconds 7
+# REVIEW-#9: single shared watcher-process filter (excludes -Diagnose too)
+Get-WatcherProcess | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 # migration: remove old mechanisms
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'GTASettingsWatcher' -ErrorAction SilentlyContinue
@@ -274,8 +275,7 @@ for ($w = 0; $w -lt 30; $w++) {
     Start-Sleep -Seconds 1
     if (Test-Path -LiteralPath $readyFile) { $ready = $true; break }
 }
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
-    Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch '-Diagnose' })
+$alive = @(Get-WatcherProcess -ExcludePid $PID)
 if ($ready -and $alive.Count -gt 0) {
     Write-Host "[+] Watcher v$(Get-PkgVersion) is running and READY (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
