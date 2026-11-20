@@ -6,8 +6,15 @@ $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'MG Helper - by Bayra & Kavel1n'
 
-# remove Mark-of-the-Web from package files
-Get-ChildItem $PSScriptRoot -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue
+# remove Mark-of-the-Web from package files (MG-CR-018: scoped to runnable
+# package extensions, counted and reported - not a blanket sweep)
+$unblocked = 0
+Get-ChildItem $PSScriptRoot -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.ps1', '.bat', '.cs' } |
+    ForEach-Object {
+        try { Unblock-File -LiteralPath $_.FullName -ErrorAction Stop; $unblocked++ } catch {}
+    }
+Write-Host "[i] Mark-of-the-Web cleared on $unblocked package file(s)." -ForegroundColor DarkGray
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 
@@ -50,6 +57,12 @@ $deploy = @(
     'restore-mg-snapshot.ps1', 'install-gta-watcher.ps1', 'MG-Helper-Host.cs', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
+# MG-CR-019: staged deployment - everything is copied into a staging folder,
+# VERIFIED there (present, non-empty, BOM on ps1, version.json parses), and
+# only then promoted into HelperDir. A mid-deploy failure never leaves a
+# mixed-version install; the previous deployment stays intact.
+$staging = Join-Path $HelperDir (".staging-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $staging | Out-Null
 foreach ($f in $deploy) {
     $srcFile = Join-Path $PSScriptRoot $f
     # Repair runs the DEPLOYED installer: never copy a file onto itself
@@ -60,23 +73,63 @@ foreach ($f in $deploy) {
             continue
         }
         Write-Host "[!] $f missing next to this installer - re-download the whole package." -ForegroundColor Red
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
     }
+    $dstFile = Join-Path $staging $f
     if ($f -like '*.ps1') {
         # ps1 files get BOM (PS 5.1 + Cyrillic), other files copied verbatim
         $bytes = [IO.File]::ReadAllBytes($srcFile)
         $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
         if (-not $hasBom) {
             $txt = [Text.Encoding]::UTF8.GetString($bytes)
-            [IO.File]::WriteAllText((Join-Path $HelperDir $f), $txt, $utf8bom)
+            [IO.File]::WriteAllText($dstFile, $txt, $utf8bom)
         } else {
-            Copy-Item -LiteralPath $srcFile (Join-Path $HelperDir $f) -Force
+            Copy-Item -LiteralPath $srcFile $dstFile -Force
         }
         continue
     }
-    Copy-Item -LiteralPath $srcFile (Join-Path $HelperDir $f) -Force
+    Copy-Item -LiteralPath $srcFile $dstFile -Force
 }
-Write-Host "[+] Package scripts deployed." -ForegroundColor Green
+# verify the staging copy BEFORE promoting it
+$deployProblems = @()
+foreach ($f in $deploy) {
+    $dstFile = Join-Path $staging $f
+    if (-not (Test-Path -LiteralPath $dstFile)) { continue }   # version.json optional
+    if ((Get-Item -LiteralPath $dstFile).Length -eq 0) { $deployProblems += "$f is empty" }
+    if ($f -like '*.ps1') {
+        $b = [IO.File]::ReadAllBytes($dstFile)
+        if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) { $deployProblems += "$f has no BOM" }
+        $perr = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseFile($dstFile, [ref]$null, [ref]$perr)
+        if ($perr -and $perr.Count) { $deployProblems += "$f parse error: $($perr[0].Message)" }
+    }
+    if ($f -eq 'version.json') {
+        try { $null = (Get-Content -LiteralPath $dstFile -Raw | ConvertFrom-Json).version } catch { $deployProblems += 'version.json is not valid JSON' }
+    }
+}
+if ($deployProblems.Count -gt 0) {
+    Write-Host '[!] Staged package verification FAILED - the previous deployment stays intact:' -ForegroundColor Red
+    $deployProblems | ForEach-Object { Write-Host "      - $_" -ForegroundColor Red }
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+# promote: staging -> HelperDir (same self-copy guard)
+foreach ($f in $deploy) {
+    $dstFile = Join-Path $staging $f
+    if (-not (Test-Path -LiteralPath $dstFile)) { continue }
+    $finalPath = Join-Path $HelperDir $f
+    if ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot $f)) -eq [IO.Path]::GetFullPath($finalPath)) { continue }
+    Copy-Item -LiteralPath $dstFile $finalPath -Force
+}
+Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+# MG-CR-017 (part 1): record SHA256 of every deployed file so a user (or we,
+# remotely via Diagnose) can verify the installed copy against the package
+Get-ChildItem $HelperDir -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -in $deploy -or $_.Name -eq 'MG-Helper-Host.exe' } |
+    ForEach-Object { "{0}  {1}" -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $_.Name } |
+    Set-Content -LiteralPath (Join-Path $HelperDir 'package_hashes.txt') -Encoding ASCII
+Write-Host "[+] Package scripts deployed and verified." -ForegroundColor Green
 
 # ------------------------------------------------------------
 # 3. golden: migrate/create, self-heal chain
@@ -101,10 +154,12 @@ $mgFound = Find-MiamiGraphicsDir
 if ($mgFound) { $cfg.miamiGraphicsDir = $mgFound }
 $mjFound = Find-MajesticJson
 if ($mjFound) { $cfg.majesticJson = $mjFound }
+# MG-CR-020: success message only when the save actually succeeded
 if (-not (Save-MgConfig $cfg)) {
     Write-Host '[!] config.json could NOT be saved - discovery will repeat next start.' -ForegroundColor Yellow
+} else {
+    Write-Host "[i] config.json written (discovered paths are cached there)." -ForegroundColor DarkGray
 }
-Write-Host "[i] config.json written (discovered paths are cached there)." -ForegroundColor DarkGray
 
 # ------------------------------------------------------------
 # 5. autostart: one scheduled task (logon + 10-min repeat), mutex-protected
@@ -207,16 +262,28 @@ else {
 }
 
 # ------------------------------------------------------------
-# 6. start watcher (via the task - no console flash, no focus steal)
+# 6. start watcher (via the task - no console flash, no focus steal).
+#    MG-CR-021: wait for the watcher READY marker (mutex held + config loaded
+#    + state initialised), not just process existence.
 # ------------------------------------------------------------
+$readyFile = Join-Path $HelperDir 'watcher.ready'
+Remove-Item -LiteralPath $readyFile -Force -ErrorAction SilentlyContinue   # stale marker from a previous run
 Start-ScheduledTask -TaskName 'MG_Helper_Watcher'
-Start-Sleep 6
+$ready = $false
+for ($w = 0; $w -lt 30; $w++) {
+    Start-Sleep -Seconds 1
+    if (Test-Path -LiteralPath $readyFile) { $ready = $true; break }
+}
 $alive = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" |
     Where-Object { $_.CommandLine -match 'gta-settings-watcher\.ps1' -and $_.ProcessId -ne $PID -and $_.CommandLine -notmatch '-Diagnose' })
-if ($alive.Count -gt 0) {
-    Write-Host "[+] Watcher v$(Get-PkgVersion) is running (PID $($alive[0].ProcessId))." -ForegroundColor Green
+if ($ready -and $alive.Count -gt 0) {
+    Write-Host "[+] Watcher v$(Get-PkgVersion) is running and READY (PID $($alive[0].ProcessId))." -ForegroundColor Green
     Write-Host ""
     Write-Host "Done! by Bayra & Kavel1n" -ForegroundColor Cyan
+} elseif ($alive.Count -gt 0) {
+    Write-Host "[i] Watcher process is running (PID $($alive[0].ProcessId)) but the READY marker did not appear in 30 s." -ForegroundColor Yellow
+    Write-Host "    Check watcher.log - the watcher may still be initialising." -ForegroundColor Yellow
+    exit 1
 } else {
     Write-Host "[!] Watcher failed to start - run MG-Helper.bat > [8] Diagnose." -ForegroundColor Red
     exit 1
