@@ -66,7 +66,7 @@ function Save-State {
     } catch {
         # MG-CR-016: a failed state save is LOGGED, not silently swallowed -
         # adopt/takeover evidence lives in this file
-        Log "[!] state.json save FAILED: $_"
+        Log "[MG-E-0101] state.json save FAILED: $_"
         try { Remove-Item -LiteralPath "$StateFile.tmp" -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
@@ -259,10 +259,10 @@ if ($binsStatus -eq 'restored') {
     Log "[i] vanilla bins restored from archive (unclean previous session)"
 }
 elseif ($binsStatus -eq 'partial') {
-    Log "[!] vanilla bins restored PARTIALLY - next tick continues; launcher patch may need a retry"
+    Log "[MG-E-0201] vanilla bins restored PARTIALLY - next tick continues; launcher patch may need a retry"
 }
 elseif ($binsStatus -eq 'failed') {
-    Log "[!] vanilla bins could NOT be restored - Majestic may hit error 1002 this launch"
+    Log "[MG-E-0202] vanilla bins could NOT be restored - Majestic may hit error 1002 this launch"
 }
 
 Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
@@ -325,7 +325,7 @@ if ((Test-GoldenKeyCurrent) -eq $false) {
     $wasRunning = [bool](Find-MatchingProcess -Patterns $cfg.gameProcesses)
     if ($wasRunning) { $state.phase = 'UnknownSession' }
     Save-State $state
-    Log "[!] ИГРА/GPU изменились с момента создания эталона - SAFE MODE (без авто-применения и adopt). Новый эталон: меню [11]."
+    Log "[MG-E-0301] ИГРА/GPU изменились с момента создания эталона - SAFE MODE (без авто-применения и adopt). Новый эталон: меню [11]."
     Ev 'golden.mismatch' 'variant or GPU changed'
 }
 elseif (-not (Get-SavedGoldenKey)) {
@@ -382,7 +382,7 @@ function Reset-SettingsWatcher {
         Register-ObjectEvent $script:fsw 'Error'   -Action { $global:MG_SettingsDirty = $true } | Out-Null
         $script:fswPath = $cfg.settingsXml
         Log "[i] FileSystemWatcher armed on $dir\$leaf"
-    } catch { Log "[!] FSW unavailable - guard falls back to polling only: $_"; $script:fsw = $null }
+    } catch { Log "[MG-E-0103] FSW unavailable - guard falls back to polling only: $_"; $script:fsw = $null }
 }
 Reset-SettingsWatcher
 
@@ -428,7 +428,7 @@ while ($true) {
             $bs = Ensure-BinsRestored -Cfg $cfg
             if ($bs -eq 'restored') { Log "vanilla bins restored before launcher patch"
                 Ev 'insurance.restored' 'before launcher patch' }
-            elseif ($bs -in @('partial', 'failed')) { Log "[!] vanilla bins $bs before launcher patch - error 1002 risk this launch"
+            elseif ($bs -in @('partial', 'failed')) { Log "[MG-E-0201] vanilla bins $bs before launcher patch - error 1002 risk this launch"
                 Ev 'insurance.risk' $bs }
         }
         $script:wasLauncher = $launcher
@@ -448,7 +448,7 @@ while ($true) {
             try {
                 Copy-Item -LiteralPath $cfg.settingsXml (Join-Path $HelperDir 'settings.before_apply.bak') -Force -ErrorAction Stop
                 $preBackupOk = $true
-            } catch { Log "[!] pre-apply backup FAILED: $_ - golden will NOT be applied (nothing overwritten)" }
+            } catch { Log "[MG-E-0102] pre-apply backup FAILED: $_ - golden will NOT be applied (nothing overwritten)" }
             Ensure-BinsRestored -Cfg $cfg | Out-Null
             $sessionStart = Get-Date
             $lastGuardReapply = [datetime]::MinValue
