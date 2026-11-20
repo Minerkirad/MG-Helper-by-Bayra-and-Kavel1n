@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.8.0'   # держать в синке с version.json
+$script:Version = '1.9.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -528,16 +528,24 @@ function Get-FileMtimeUtc {
 }
 
 function Test-SameSettings {
-    # whitespace-insensitive compare. TRI-STATE:
-    #   $true/$false - compared;  $null - could not read (the game holds the file
-    #   exclusively). Callers MUST NOT treat $null as drift, otherwise they fight
-    #   the running game with pointless rewrites every few seconds.
+    # TRI-STATE: $true/$false - compared; $null - could not read (the game holds
+    # the file exclusively). Callers MUST NOT treat $null as drift, otherwise
+    # they fight the running game with pointless rewrites every few seconds.
     param([string]$A, [string]$B)
     try {
         $ra = [IO.File]::ReadAllText($A)
         $rb = [IO.File]::ReadAllText($B)
     } catch { return $null }
-    return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
+    try {
+        # MG-CR-015: structural compare - ignores insignificant whitespace AND
+        # attribute order, unlike the raw text compare
+        $da = New-Object System.Xml.XmlDocument; $da.XmlResolver = $null; $da.LoadXml($ra)
+        $db = New-Object System.Xml.XmlDocument; $db.XmlResolver = $null; $db.LoadXml($rb)
+        return ($da.DocumentElement.OuterXml -eq $db.DocumentElement.OuterXml)
+    } catch {
+        # not parseable XML - fall back to the whitespace-insensitive text compare
+        return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
+    }
 }
 
 function Test-GuardActive {
