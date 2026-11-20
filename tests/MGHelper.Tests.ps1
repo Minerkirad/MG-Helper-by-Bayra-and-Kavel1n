@@ -45,7 +45,7 @@ Describe 'Test-SameSettings (tri-state, MG-CR-015 structural)' {
     }
     It 'is structural: whitespace and attribute order do not matter' {
         [IO.File]::WriteAllText($a, "<Settings>`r`n  <X value=`"1`" `n   Y=`"2`"`r`n />`r`n</Settings>")
-        [IO.File]::WriteAllText($b, '<Settings Y="2"><X value="1" /></Settings>')
+        [IO.File]::WriteAllText($b, '<Settings><X Y="2" value="1" /></Settings>')
         Test-SameSettings $a $b | Should -Be $true
     }
     It 'detects a real change' {
