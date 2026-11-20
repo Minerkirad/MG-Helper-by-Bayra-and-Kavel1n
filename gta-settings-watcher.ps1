@@ -152,6 +152,19 @@ if ($Diagnose) {
     }
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task) { $concl += "[ПРОБЛЕМА] задача автозапуска MG_Helper_Watcher отсутствует - запусти пункт меню [9] Repair." }
+    # ROADMAP 2.3: golden key status (works only when the golden/settings are readable)
+    if ($Golden -and (Test-Path -LiteralPath $Golden) -and $sx) {
+        $keyMatch = Test-GoldenKeyMatchPure -StoredVariant $null -StoredGpu $null -CurVariant $null -CurGpu $null
+        try {
+            $k = Get-SavedGoldenKey
+            $cur = Get-GoldenKeyInfo -Cfg @{ settingsXml = $sx }
+            $keyMatch = if ($k) { Test-GoldenKeyMatchPure -StoredVariant $k.variant -StoredGpu $k.gpu -CurVariant $cur.variant -CurGpu $cur.gpu } else { $null }
+        } catch { $keyMatch = $null }
+        "Ключ эталона:     $($(if ($keyMatch -eq $false) { 'НЕ СОВПАДАЕТ (сменилась игра/GPU)' } elseif ($keyMatch) { 'совпадает' } else { 'не записан' }))"
+        if ($keyMatch -eq $false) {
+            $concl += "[ПРОБЛЕМА] игра/GPU изменились с момента создания эталона - авто-применение отключено. Создай новый эталон: меню [11]."
+        }
+    }
     $logAge = if (Test-Path -LiteralPath $LogFile) { ((Get-Date) - (Get-Item -LiteralPath $LogFile).LastWriteTime).TotalMinutes } else { 99999 }
     if ($logAge -gt 120) { $concl += "[ВНИМАНИЕ] watcher.log не обновлялся $([int]$logAge) минут - возможно, watcher не работает." }
     if ($concl.Count -eq 0) { $concl += "Всё в порядке - проблем не найдено." }
@@ -281,6 +294,13 @@ if ($state.phase -eq 'InGame') {
         $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))"
     } else { $state.phase = 'Idle' }
 }
+function Test-GoldenKeyCurrent {
+    # $true/$false per Test-GoldenKeyMatchPure; $null when no key recorded yet
+    $k = Get-SavedGoldenKey
+    if (-not $k) { return $null }
+    $cur = Get-GoldenKeyInfo -Cfg $cfg
+    return (Test-GoldenKeyMatchPure -StoredVariant $k.variant -StoredGpu $k.gpu -CurVariant $cur.variant -CurGpu $cur.gpu)
+}
 if (-not $wasRunning) {
     # game ALREADY running at watcher start: without a trusted InGame state we
     # must NOT apply the golden (would stomp the user's mid-game changes) and
@@ -295,6 +315,24 @@ if (-not $wasRunning) {
         Log '[!] game already running and state is not trusted - SAFE MODE (no golden apply, no adopt) until the game closes'
     }
 }
+# ROADMAP 2.3: per-variant/per-GPU golden key - a changed game variant or GPU
+# means the stored golden belongs to another setup: no auto-apply, no adopt.
+# A fresh golden is one click: menu [11]. Legacy installs without a key are
+# backfilled silently (conservative: no mismatch until proven).
+$goldenMismatch = $false
+if ((Test-GoldenKeyCurrent) -eq $false) {
+    $goldenMismatch = $true
+    $wasRunning = [bool](Find-MatchingProcess -Patterns $cfg.gameProcesses)
+    if ($wasRunning) { $state.phase = 'UnknownSession' }
+    Save-State $state
+    Log "[!] ИГРА/GPU изменились с момента создания эталона - SAFE MODE (без авто-применения и adopt). Новый эталон: меню [11]."
+    Ev 'golden.mismatch' 'variant or GPU changed'
+}
+elseif (-not (Get-SavedGoldenKey)) {
+    # legacy install: backfill the key from the current setup
+    $null = Save-GoldenKey -Cfg $cfg
+}
+
 $lastBeat = Get-Date
 $script:wasLauncher = $false
 $errStreak = 0
@@ -416,7 +454,14 @@ while ($true) {
             $lastGuardReapply = [datetime]::MinValue
             $appliedThisSession = $false
             $lastApplyUtc = [datetime]::MinValue
-            if ($preBackupOk -and (Apply-Golden -Cfg $cfg)) {
+            # ROADMAP 2.3: re-check the key at every session start (GPU is written
+            # into settings.xml at game start) - a mismatched golden is never applied
+            if ((Test-GoldenKeyCurrent) -eq $false) { $goldenMismatch = $true }
+            if ($goldenMismatch) {
+                Log "[!] golden mismatch - NOT applying; create a fresh golden via menu [11]"
+                Ev 'golden.mismatch' 'session start'
+            }
+            elseif ($preBackupOk -and (Apply-Golden -Cfg $cfg)) {
                 Log "GTA5 launched -> settings applied"
                 $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                 $appliedThisSession = $true
@@ -476,7 +521,7 @@ while ($true) {
                 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
                 # REVIEW-#4: rotate the old golden into .bak - the self-heal chain
                 # references it, so it must actually be maintained
-                Copy-Item -LiteralPath $Golden "$Golden.bak" -Force -ErrorAction SilentlyContinue
+                try { Copy-Item -LiteralPath $Golden "$Golden.bak" -Force -ErrorAction Stop } catch { Log "[!] could not back up the old golden to .bak: $_" }
                 Copy-Item -LiteralPath $Golden (Join-Path $HelperDir "settings.golden.xml.old_$stamp") -Force -ErrorAction SilentlyContinue
                 # atomic: a crash mid-copy must not leave a torn golden
                 $adoptBytes = [IO.File]::ReadAllBytes($cfg.settingsXml)
@@ -539,7 +584,7 @@ while ($true) {
         # disable adopt-on-exit: the user's own later changes are legitimate.
         # ROADMAP 1.1: an FSW event ($dirtyNow) triggers the check immediately
         # instead of waiting for the next full tick.
-        if ((Test-GuardActive $sessionStart $GuardWindowSec $sessionGuard $running) -and
+        if ((-not $goldenMismatch) -and (Test-GuardActive $sessionStart $GuardWindowSec $sessionGuard $running) -and
             ((Get-Date) - $lastGuardReapply).TotalSeconds -ge 10) {
             if ($dirtyNow) { Log "guard: FSW event - immediate check" }
             $same = Test-SameSettings $cfg.settingsXml $Golden
