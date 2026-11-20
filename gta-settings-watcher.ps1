@@ -620,6 +620,24 @@ while ($true) {
                 $GuardWindowSec = if ($null -ne $cfg.guardWindowSec) { [int]$cfg.guardWindowSec } else { 120 }
             }
             Log "[i] config reloaded (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s)"
+            # ROADMAP 5.2: opt-in silent auto-update - only when completely idle
+            if ($cfgNew.autoUpdate -and ($state.phase -eq 'Idle') -and
+                (-not (Find-MatchingProcess -Patterns $cfgNew.gameProcesses)) -and
+                (-not (Find-MatchingProcess -Patterns $cfgNew.launcherProcesses))) {
+                try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    $relUpd = Invoke-RestMethod "https://api.github.com/repos/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/releases/latest" -Headers @{ 'User-Agent' = 'MG-Helper' } -TimeoutSec 20
+                    $latestUpd = ($relUpd.tag_name -replace '^v', '')
+                    $newer = $false
+                    try { $newer = ([version]$latestUpd -gt [version](Get-PkgVersion)) } catch {}
+                    if ($newer) {
+                        Log "[i] auto-update: v$latestUpd available (autoUpdate=true) - starting updater"
+                        Ev 'auto-update.start' "v$(Get-PkgVersion) -> v$latestUpd"
+                        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $HelperDir 'update-helper.ps1') -WindowStyle Hidden
+                        exit 0   # the updater's installer stops/restarts this watcher
+                    }
+                } catch { Log "[!] auto-update check failed: $_" }
+            }
             if (([int]$state.restarts -gt 0) -and ((Get-Date) - $lastErrAt).TotalMinutes -ge 30) {
                 $state.restarts = 0; Save-State $state   # healthy 30 min - reset the restart budget
             }
