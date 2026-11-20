@@ -51,7 +51,7 @@ if (Get-Process -Name 'GTA5','GTA5_Enhanced' -ErrorAction SilentlyContinue) {
     Write-Host '[!] GTA5 запущена. Сначала выйди из игры!' -ForegroundColor Red
     exit 1
 }
-$majesticProc = Get-CimInstance Win32_Process -Filter "Name!='powershell.exe' AND Name!='pwsh.exe'" -ErrorAction SilentlyContinue |
+$majesticProc = Get-CimInstance Win32_Process -OperationTimeoutSec 15 -Filter "Name!='powershell.exe' AND Name!='pwsh.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match 'majestic' -or ($_.ExecutablePath -and $_.ExecutablePath -match '\\majestic[^\\]*\.exe$') }
 if ($majesticProc) {
     Write-Host '[!] Majestic запущен. Сначала закрой лаунчер!' -ForegroundColor Red
