@@ -161,16 +161,19 @@ New-Item -ItemType Directory -Force -Path (Join-Path $sandbox 'mg_snapshot') | O
 [IO.File]::WriteAllText((Join-Path $sandbox "mg_snapshot\$legacyName"), 'LEGACY-LEFTOVER')
 $logged = @()
 Snapshot-MgFiles -Cfg @{ miamiGraphicsDir = $mgWeird } -Logger { param($m) $script:logged += $m } -NoStandardScan
-$maniPath = Join-Path $sandbox 'mg_snapshot\manifest.json'
-if (Test-Path -LiteralPath $maniPath) {
-    $mani = Get-Content -LiteralPath $maniPath -Raw | ConvertFrom-Json
+# ROADMAP 2.4: the newest GENERATION dir with its own manifest
+$genDir = @(Get-ChildItem (Join-Path $sandbox 'mg_snapshot') -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.json') } |
+    Sort-Object Name -Descending)[0]
+if ($genDir) {
+    $mani = Get-Content -LiteralPath (Join-Path $genDir.FullName 'manifest.json') -Raw | ConvertFrom-Json
     $okRT = @($mani.PSObject.Properties).Count -ge 2
     foreach ($p in $mani.PSObject.Properties) {
         if (-not (Test-Path -LiteralPath (Join-Path $mgWeird $p.Value))) { $okRT = $false }
     }
-    if ($okRT -and -not (Test-Path -LiteralPath (Join-Path $sandbox "mg_snapshot\$legacyName"))) {
-        Good 'snapshot: round-trip paths resolve exactly, legacy leftover swept'
-    } else { Bad 'snapshot: round-trip broken or legacy file resurrects' }
+    if ($okRT -and (Test-Path -LiteralPath (Join-Path $sandbox "mg_snapshot\$legacyName"))) {
+        Good 'snapshot: round-trip paths resolve exactly, generation layout (legacy fallback untouched)'
+    } else { Bad 'snapshot: round-trip broken in generation layout' }
 } else { Bad 'snapshot: manifest.json not written' }
 
 # 11b. exe-token matching: document paths must not look like the game
@@ -240,7 +243,6 @@ $restTxt = Get-Content (Join-Path $repo 'restore-mg-snapshot.ps1') -Raw
 if ($restTxt -notmatch 'mapping\.ContainsKey\(\$_\.Name\)') { Bad 'restore: manifest must filter unmapped (legacy/stale) files' }
 if ($restTxt -notmatch '\^f\\d\+\\\.json\$') { Bad 'restore: new-format fallback must return null, not fN.json' }
 if ($wtxt -match 'function Snapshot-MgFiles') { Bad 'watcher: must use common.ps1 Snapshot-MgFiles (round-trip testable), not a local copy' }
-if ($ctxt -notmatch 'rootPrefixes') { Bad 'common: stale snapshot sweep missing' }
 if ($ctxt -notmatch 'function Get-LatestBinArchive') { Bad 'common: Get-LatestBinArchive missing' }
 if ($ctxt -match 'Select-Object -First 1[\s\S]{0,200}vanilla_backup_archive') { Bad 'common: latest-only bin archive selection is back' }
 if ($ctxt -notmatch '\^\(powershell\|pwsh\|explorer\)') { Bad 'common: explorer process is not excluded from game matching' }
@@ -318,6 +320,19 @@ if ($wtxt -notmatch 'Invoke-OpReconciliation') { Bad 'watcher: reconciliation no
 foreach ($hf in 'CHANGELOG.md', '.gitattributes', 'PSScriptAnalyzerSettings.psd1') {
     if (-not (Test-Path (Join-Path $repo $hf))) { Bad "repo hygiene: $hf missing" }
 }
+# ROADMAP 2.3: golden key pure decision matrix
+if (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' 'GTA V' 'gpuA') { Good 'golden-key: identical setup matches' } else { Bad 'golden-key: identical setup mismatched' }
+if (-not (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' 'GTA V Enhanced' 'gpuA')) { Good 'golden-key: game variant change detected' } else { Bad 'golden-key: variant change missed' }
+if (-not (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' 'GTA V' 'gpuB')) { Good 'golden-key: GPU change detected' } else { Bad 'golden-key: GPU change missed' }
+if ($null -eq (Test-GoldenKeyMatchPure '' '' 'GTA V' 'gpuA')) { Good 'golden-key: no recorded key -> conservative match' } else { Bad 'golden-key: missing key mishandled' }
+if ($null -eq (Test-GoldenKeyMatchPure 'GTA V' 'gpuA' '' '')) { Good 'golden-key: unreadable current identity -> conservative match' } else { Bad 'golden-key: unreadable identity mishandled' }
+if ($wtxt -notmatch 'goldenMismatch') { Bad 'watcher: golden key mismatch gate missing (ROADMAP 2.3)' }
+if ($wtxt -notmatch 'Save-GoldenKey|Get-SavedGoldenKey') { Bad 'watcher: golden key backfill missing' }
+# ROADMAP 2.4: snapshot generations
+if ($ctxt -notmatch 'genDir = Join-Path \$snapRoot \(Get-Date') { Bad 'common: Snapshot-MgFiles must write timestamped generations (ROADMAP 2.4)' }
+$oldSnap = Join-Path $sandbox 'mg_snapshot'
+$gensSnap = @(Get-ChildItem $oldSnap -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'manifest.json') })
+if ($gensSnap.Count -gt 0) { Good 'snapshot: generations layout present after round-trip' } else { Bad 'snapshot: generations layout missing' }
 
 # 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
 $vx = Join-Path $sandbox 'valid_settings.xml'
