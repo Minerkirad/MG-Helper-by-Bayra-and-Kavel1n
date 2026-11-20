@@ -87,6 +87,9 @@ if (-not ((Test-Path -LiteralPath $bkGoldenPath) -and (Test-Path -LiteralPath $b
     Write-Host "[!] резервные копии не созданы - отмена, ничего не изменено." -ForegroundColor Red
     exit 1
 }
+# ROADMAP 2.1: journal the transaction so a kill mid-way is reconciled at next watcher start
+Start-OpJournal 'profile-shadows'
+Set-OpJournalStep 'profile-shadows' 'backup' 'done' $bkGoldenPath
 $goldenWritten = $false
 foreach ($file in @($Golden, $Settings)) {
     $bytes = [Text.UTF8Encoding]::new($true).GetBytes($merged[$file].text)
@@ -106,14 +109,20 @@ foreach ($file in @($Golden, $Settings)) {
             # MG-CR-022: verify the rollback by re-reading, then report honestly
             $rVerify = $false
             try { $rVerify = (([IO.File]::ReadAllBytes($Golden)) -join ',') -eq ($rBytes -join ',') } catch { $rVerify = $false }
+            Complete-OpJournal 'profile-shadows' $(if ($rOk -and $rVerify) { 'rolled-back' } else { 'rollback-failed' })
             if ($rOk -and $rVerify) { Write-Host "[!] golden ROLLED BACK from backup - nothing changed." -ForegroundColor Yellow }
             else { Write-Host "[!] ОТКАТ НЕ УДАЛОСЬ ПОДТВЕРДИТЬ - эталон может содержать новый профиль. Восстанови вручную из $bkGoldenPath" -ForegroundColor Red }
         } else {
             Write-Host "[!] nothing was modified yet - aborting." -ForegroundColor Yellow
+            Complete-OpJournal 'profile-shadows' 'aborted'
         }
         exit 1
     }
-    if ($file -eq $Golden) { $goldenWritten = $true }
+    if ($file -eq $Golden) {
+        $goldenWritten = $true
+        Set-OpJournalStep 'profile-shadows' 'write-golden' 'done' $Golden
+    }
 }
+Complete-OpJournal 'profile-shadows' 'done'
 Write-Host "[+] Shadow-cut applied (golden: $($merged[$Golden].count), settings: $($merged[$Settings].count) values)" -ForegroundColor Green
 Write-Host "[+] Backup: settings.golden.xml.before_shadows_$stamp / settings.xml.before_shadows_$stamp" -ForegroundColor DarkGray
