@@ -58,6 +58,9 @@ function Save-State {
         if (Test-Path -LiteralPath $StateFile) { [IO.File]::Replace($tmp, $StateFile, [NullString]::Value) }
         else { Move-Item -LiteralPath $tmp $StateFile -Force }
     } catch {
+        # MG-CR-016: a failed state save is LOGGED, not silently swallowed -
+        # adopt/takeover evidence lives in this file
+        Log "[!] state.json save FAILED: $_"
         try { Remove-Item -LiteralPath "$StateFile.tmp" -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
@@ -238,9 +241,15 @@ try {
 $wasRunning = $false
 if ($state.phase -eq 'InGame') {
     # previous watcher instance died mid-session: adopt without re-snapshot.
-    # PID reuse guard: the pid must still belong to a game-like process
+    # PID reuse guard (MG-CR-014): the pid must still belong to a game-like
+    # process; if we recorded the exe path at launch, it must also match
     $gp = Get-Process -Id $state.gamePid -ErrorAction SilentlyContinue
-    if ($gp -and ($gp.Name -like 'GTA5*' -or $gp.Name -like '*gtav*')) {
+    $nameOk = $gp -and ($gp.Name -like 'GTA5*' -or $gp.Name -like '*gtav*')
+    $pathOk = $true
+    if ($nameOk -and $state.gamePath) {
+        try { $pathOk = ((Get-Item -LiteralPath $gp.Path -ErrorAction Stop).FullName -eq $state.gamePath) } catch { $pathOk = $false }
+    }
+    if ($nameOk -and $pathOk) {
         $wasRunning = $true; Log "[i] adopting InGame session (PID $($state.gamePid))"
     } else { $state.phase = 'Idle' }
 }
@@ -266,6 +275,11 @@ $lastGuardReapply = [datetime]::MinValue
 $lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
 $appliedThisSession = $false           # did WE successfully apply golden in THIS session?
 $script:restartPending = $false
+# MG-CR-021: ready handshake - the installer waits for this marker instead of
+# guessing from process existence. Stale markers are refreshed below.
+$ReadyFile = Join-Path $HelperDir 'watcher.ready'
+[IO.File]::WriteAllText($ReadyFile, "ready=$(Get-Date -Format 'o') version=$(Get-PkgVersion)" + [char]13 + [char]10, [Text.UTF8Encoding]::new($false))
+Log "[i] watcher READY (mutex held, config loaded, state initialised)"
 $sessionStart = $null
 if ($state.sessionStart) { try { $sessionStart = [datetime]$state.sessionStart } catch { $sessionStart = $null } }
 if ($wasRunning) {
@@ -340,6 +354,8 @@ while ($true) {
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             $state.phase = 'InGame'
             $state.gamePid = $newPid
+            $gp0 = Get-Process -Id $newPid -ErrorAction SilentlyContinue
+            $state.gamePath = if ($gp0 -and $gp0.Path) { $gp0.Path } else { $null }   # MG-CR-014: takeover identity
             $state.sessionStart = $sessionStart.ToString('o')
             $state.guardRollbacks = 0
             $state.applied = $appliedThisSession
@@ -507,5 +523,6 @@ while ($true) {
 }
 
 Log "watcher stopped"
+try { Remove-Item -LiteralPath $ReadyFile -Force -ErrorAction SilentlyContinue } catch {}
 # Snapshot-MgFiles lives in common.ps1 (Logger-aware, unit-tested by tools/check.ps1)
 
