@@ -293,6 +293,21 @@ foreach ($pf in 'max-fps.ps1', 'cut-shadows.ps1') {
     if ($ptxt -notmatch 'ОТКАТ НЕ УДАЛОСЬ ПОДТВЕРДИТЬ') { Bad "${pf}: rollback result must be verified (MG-CR-022)" }
     if ($ptxt -notmatch 'before the transaction starts') { Bad "${pf}: backup existence must be checked before the transaction (MG-CR-022)" }
 }
+# REVIEW.md rounds 1-2 guards
+$ctxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
+if ($ctxt -notmatch 'function Get-WatcherProcess') { Bad 'common: shared Get-WatcherProcess missing (REVIEW-#9)' }
+if ($ctxt -notmatch '\.incomplete') { Bad 'common: torn-generation .incomplete marker missing (REVIEW-#19)' }
+if ($ctxt -notmatch 'OperationTimeoutSec 15') { Bad 'common: CIM calls need -OperationTimeoutSec 15 (REVIEW-#22)' }
+$wtxt = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
+if ($wtxt -notmatch 'not \$adopted -and \$appliedThisSession') { Bad 'watcher: exit-restore must require appliedThisSession (REVIEW-#3)' }
+if ($wtxt -notmatch 'exit handling deferred') { Bad 'watcher: exit-branch recheck after the 3 s wait missing (REVIEW-#21)' }
+if ($wtxt -notmatch 'state\.json save FAILED') { Bad 'watcher: Save-State failures must be logged (REVIEW-#16)' }
+if ($wtxt -notmatch 'StopCheck') { Bad 'watcher: Archive-VanillaBins must honour the stop event mid-copy (REVIEW-#19)' }
+if ($wtxt -notmatch 'dlccache_backup' -or -not ($wtxt -match 'Select-Object -Skip 5')) { Bad 'watcher: dlccache_backup retention missing (REVIEW-#10)' }
+$uniTxt2 = Get-Content (Join-Path $repo 'uninstall.ps1') -Raw
+if ($uniTxt2 -notmatch 'exit 1') { Bad 'uninstall: must exit 1 when incomplete (REVIEW-#20)' }
+$mgTxt = Get-Content (Join-Path $repo 'MG-Helper.ps1') -Raw
+if ($mgTxt -notmatch 'LASTEXITCODE') { Bad 'menu: uninstall result must be checked (REVIEW-#20)' }
 
 # 11m. MG-CR-003: XML validation rejects torn/partial/wrong-root files
 $vx = Join-Path $sandbox 'valid_settings.xml'
@@ -351,6 +366,10 @@ Remove-Item (Join-Path $mjP 'backup\b.bin') -Force -ErrorAction SilentlyContinue
 $st2 = Ensure-BinsRestored -Cfg @{ majesticJson = $mjPJson }
 $lockP.Close(); $lockP.Dispose()
 if ($st1 -eq 'restored' -and $st2 -eq 'partial') { Good 'bins-ensure: partial status on a locked source' } else { Bad "bins-ensure: st1=$st1 st2=$st2 (expected restored/partial)" }
+# REVIEW-#2: a partial restore CONTINUES on the next tick (the old code saw
+# "at least one bin" and never finished)
+$st3 = Ensure-BinsRestored -Cfg @{ majesticJson = $mjPJson }
+if ($st3 -eq 'restored' -and (Test-Path (Join-Path $mjP 'backup\a.bin'))) { Good 'bins-ensure: partial restore continues on the next tick' } else { Bad "bins-ensure: partial never finished (st3=$st3)" }
 $script:HelperDir = $oldBk
 
 # 13. hidden host: source deployed, installer compiles it and starts via the task,
