@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '1.9.0'   # держать в синке с version.json
+$script:Version = '1.9.1'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -306,7 +306,7 @@ function Get-MajesticBackupDir {
 
 # ------------------------------------------------------------
 # Process detection: name-based (fast) first, then command-line
-# fallback via CIM - THROTTLED to once per 60 s with cached result.
+# fallback via CIM - THROTTLED to once per 20 s per pattern set (REVIEW-#13: comment kept in sync with the code).
 # powershell/pwsh hosts are EXCLUDED from the command-line fallback
 # (otherwise the watcher mistakes its own tools for Majestic).
 # ------------------------------------------------------------
@@ -570,12 +570,30 @@ function Test-AdoptCandidate {
 # vanilla bins: ensure present in the launcher backup dir
 # (safety net against the error-1002 stuck state)
 # ------------------------------------------------------------
+function Get-WatcherProcess {
+    # REVIEW-#9: ONE source of truth for "which processes run the watcher".
+    # Excludes this process and -Diagnose runs (diagnose must not be killed by
+    # install/repair, nor counted as a live watcher by the menu).
+    param([int]$ExcludePid = $PID)
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -OperationTimeoutSec 15 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ProcessId -ne $ExcludePid -and
+            $_.CommandLine -match 'gta-settings-watcher\.ps1' -and
+            $_.CommandLine -notmatch '-Diagnose'
+        }
+}
+
 function Get-LatestBinArchive {
-    # newest generation that ACTUALLY contains .bin files.
-    # Empty/torn generations (locked bins, full disk, legacy leftovers) are skipped,
-    # so the 1002 insurance never points at an empty "latest" folder.
+    # newest COMPLETE generation that actually contains .bin files.
+    # REVIEW-#19: generations mid-copy (killed process, power loss) live in
+    # "<stamp>.incomplete" folders and are ignored AND cleaned up here - only
+    # the verified rename makes a generation trustworthy.
     $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
-    $gens = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+    Get-ChildItem $arcRoot -Directory -Filter '*.incomplete' -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $gens = Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch '\.incomplete$' } |
+        Sort-Object Name -Descending
     foreach ($g in $gens) {
         $files = @(Get-ChildItem $g.FullName -Filter '*.bin' -ErrorAction SilentlyContinue)
         if ($files.Count -gt 0) { return @{ dir = $g; files = $files } }
@@ -584,9 +602,12 @@ function Get-LatestBinArchive {
 }
 
 function Ensure-BinsRestored {
-    # MG-CR-005: never reports success without verification. Returns:
-    #   'present'  - launcher already has bins
-    #   'restored' - all archived bins copied and size-verified
+    # MG-CR-005 + REVIEW-#2: never reports success without verification, and a
+    # 'partial' restore CONTINUES on the next tick (compare against the full
+    # archive list, not "at least one bin exists" - that made partial restores
+    # unfinished forever). Returns:
+    #   'present'  - launcher already has ALL archived bins
+    #   'restored' - all missing bins copied and size-verified
     #   'partial'  - some copied, some failed (retry next tick continues)
     #   'failed'   - nothing copied
     #   'none'     - no archive / no launcher backup dir
@@ -594,12 +615,13 @@ function Ensure-BinsRestored {
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
         if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return 'none' }
-        if (@(Get-ChildItem -LiteralPath $bkDir -Filter '*.bin' -File -ErrorAction SilentlyContinue).Count -gt 0) { return 'present' }
         $arc = Get-LatestBinArchive
         if (-not $arc -or $arc.files.Count -eq 0) { return 'none' }
+        $missing = @($arc.files | Where-Object { -not (Test-Path -LiteralPath (Join-Path $bkDir $_.Name)) })
+        if ($missing.Count -eq 0) { return 'present' }
         $copied = 0
         $failed = 0
-        foreach ($file in $arc.files) {
+        foreach ($file in $missing) {
             $destination = Join-Path $bkDir $file.Name
             try {
                 Copy-Item -LiteralPath $file.FullName -Destination $destination -Force -ErrorAction Stop
@@ -608,7 +630,7 @@ function Ensure-BinsRestored {
             } catch { $failed++ }
         }
         if ($failed -gt 0) { return 'partial' }
-        if ($copied -eq $arc.files.Count) { return 'restored' }
+        if ($copied -eq $missing.Count) { return 'restored' }
         return 'failed'
     } catch { return 'failed' }
 }
@@ -627,8 +649,13 @@ function Restore-VanillaBackup {
         foreach ($f in $arc.files) {
             $dst = Join-Path $bkDir $f.Name
             if (-not (Test-Path -LiteralPath $dst)) {
-                Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction SilentlyContinue
-                $copied++
+                # REVIEW-#11: count VERIFIED copies, not attempts
+                $okCopy = $false
+                try {
+                    Copy-Item -LiteralPath $f.FullName -Destination $dst -Force -ErrorAction Stop
+                    $okCopy = ((Get-Item -LiteralPath $dst -ErrorAction Stop).Length -eq $f.Length)
+                } catch { $okCopy = $false }
+                if ($okCopy) { $copied++ }
             }
         }
         return ($copied -gt 0)
@@ -641,7 +668,9 @@ function Archive-VanillaBins {
     # right after the game closes. This is what makes Ensure-BinsRestored /
     # Restore-VanillaBackup actually work as 1002 insurance. Keeps $Keep newest
     # generations (each ~2 GB of local disk, zero network traffic).
-    param($Cfg, [int]$Keep = 2)
+    # $StopCheck: optional scriptblock; when it returns $true (e.g. the watcher's
+    # stop-event fired), the copy aborts and the .incomplete folder is removed.
+    param($Cfg, [int]$Keep = 2, [scriptblock]$StopCheck = $null)
     try {
         $bkDir = Get-MajesticBackupDir -Cfg $Cfg
         if (-not $bkDir -or -not (Test-Path -LiteralPath $bkDir)) { return $false }
@@ -675,14 +704,23 @@ function Archive-VanillaBins {
         if (($null -ne $free) -and ($free -lt ($need + 500MB))) { return $false }
         $arcRoot = Join-Path $script:HelperDir 'vanilla_backup_archive'
         $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
-        $dst = Join-Path $arcRoot $stamp
+        $finalDst = Join-Path $arcRoot $stamp
         # stamp collision: two calls within one second must not share a folder -
         # a failed copy into an EXISTING generation would delete its contents
         $uniq = 0
-        while (Test-Path -LiteralPath $dst) { $uniq++; $dst = Join-Path $arcRoot ("$stamp-$uniq") }
+        while (Test-Path -LiteralPath $finalDst) { $uniq++; $finalDst = Join-Path $arcRoot ("$stamp-$uniq") }
+        # REVIEW-#19: copy into "<name>.incomplete" and RENAME only after all
+        # files are verified - a kill/power-loss mid-copy can no longer leave a
+        # torn generation that Get-LatestBinArchive would trust
+        $dst = "$finalDst.incomplete"
         New-Item -ItemType Directory -Force -Path $dst | Out-Null
         $ok = 0
         foreach ($b in $bins) {
+            # cooperative stop check between multi-GB files (REVIEW-#19)
+            if ($StopCheck -and (& $StopCheck)) {
+                Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue
+                return $false
+            }
             $d = Join-Path $dst $b.Name
             # try/catch is mandatory: with $ErrorActionPreference='Stop' in the
             # caller's scope a locked source THROWS past -ErrorAction, which would
@@ -696,6 +734,8 @@ function Archive-VanillaBins {
             Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue
             return $false
         }
+        # all verified -> the atomic rename makes this generation trustworthy
+        Rename-Item -LiteralPath $dst -NewName (Split-Path $finalDst -Leaf) -Force
         # retention: keep only the newest generations
         Get-ChildItem $arcRoot -Directory -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending |
