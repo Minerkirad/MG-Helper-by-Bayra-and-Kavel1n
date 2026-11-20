@@ -528,6 +528,31 @@ function Get-FileMtimeUtc {
     try { return (Get-Item -LiteralPath $Path -ErrorAction Stop).LastWriteTimeUtc } catch { return [datetime]::MinValue }
 }
 
+function Get-XmlSignature {
+    # structural signature of an XML document: every element becomes
+    # "path [attr1=v1;attr2=v2]" with attributes SORTED - whitespace and
+    # attribute order are insignificant (CI round 1, Pester finding).
+    # NOTE: $lines is a List (reference type) because a scriptblock closure
+    # invoking `& $walk` creates a child scope where `$lines += ...` would
+    # silently create a local copy and lose all entries.
+    param([string]$XmlText)
+    try {
+        $doc = New-Object System.Xml.XmlDocument; $doc.XmlResolver = $null; $doc.LoadXml($XmlText)
+        $lines = New-Object 'System.Collections.Generic.List[string]'
+        $walk = {
+            param($node, $path)
+            foreach ($child in @($node.ChildNodes)) {
+                if ($child.NodeType -ne 'Element') { continue }
+                $attrs = @($child.Attributes | ForEach-Object { "$($_.Name)=$($_.Value)" } | Sort-Object)
+                $lines.Add(("{0} [{1}]" -f "$path/$($child.Name)", ($attrs -join ';')))
+                & $walk $child "$path/$($child.Name)"
+            }
+        }
+        & $walk ($doc.DocumentElement) ''
+        return (($lines.ToArray() | Sort-Object) -join "`n")
+    } catch { return $null }
+}
+
 function Test-SameSettings {
     # TRI-STATE: $true/$false - compared; $null - could not read (the game holds
     # the file exclusively). Callers MUST NOT treat $null as drift, otherwise
@@ -538,15 +563,14 @@ function Test-SameSettings {
         $rb = [IO.File]::ReadAllText($B)
     } catch { return $null }
     try {
-        # MG-CR-015: structural compare - ignores insignificant whitespace AND
-        # attribute order, unlike the raw text compare
-        $da = New-Object System.Xml.XmlDocument; $da.XmlResolver = $null; $da.LoadXml($ra)
-        $db = New-Object System.Xml.XmlDocument; $db.XmlResolver = $null; $db.LoadXml($rb)
-        return ($da.DocumentElement.OuterXml -eq $db.DocumentElement.OuterXml)
-    } catch {
-        # not parseable XML - fall back to the whitespace-insensitive text compare
-        return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
-    }
+        # MG-CR-015 + CI finding: structural compare via sorted-attribute
+        # signatures - insignificant whitespace AND attribute order are ignored
+        $sigA = Get-XmlSignature -XmlText $ra
+        $sigB = Get-XmlSignature -XmlText $rb
+        if ($null -ne $sigA -and $null -ne $sigB) { return ($sigA -eq $sigB) }
+    } catch {}
+    # not parseable XML - fall back to the whitespace-insensitive text compare
+    return (($ra -replace '\s+', '') -eq ($rb -replace '\s+', ''))
 }
 
 function Test-GuardActive {
