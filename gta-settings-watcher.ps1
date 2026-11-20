@@ -71,6 +71,20 @@ function Save-State {
     }
 }
 
+$EventsFile = Join-Path $HelperDir 'events.jsonl'
+function Ev {
+    # ROADMAP 3.1: structured JSONL event log next to the human-readable log -
+    # timeline of sessions, machine-parseable for diagnose reports
+    param([string]$Event, [string]$Data = '')
+    try {
+        if ((Test-Path -LiteralPath $EventsFile) -and ((Get-Item -LiteralPath $EventsFile).Length -gt 1MB)) {
+            Move-Item -LiteralPath $EventsFile "$EventsFile.old" -Force
+        }
+        $line = @{ ts = (Get-Date).ToString('o'); phase = $state.phase; event = $Event; data = $Data } | ConvertTo-Json -Compress
+        [IO.File]::AppendAllText($EventsFile, $line + "`r`n", [Text.UTF8Encoding]::new($false))
+    } catch {}
+}
+
 # Test-SameSettings / Get-FileMtimeUtc / Test-GuardActive / Test-AdoptCandidate live in common.ps1
 
 # ---------------- diagnose mode ----------------
@@ -240,6 +254,11 @@ elseif ($binsStatus -eq 'failed') {
 
 Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
 
+# ROADMAP 2.1: reconcile unfinished operations (crashed profiles/reset/import,
+# torn archive generations, stale tmp files) before anything else runs
+Invoke-OpReconciliation -Logger ${function:Log}
+Ev 'watcher.start' "version=$(Get-PkgVersion)"
+
 # MG-CR-004: trust the state only if it is schema 2 with a known phase
 $stateTrusted = $false
 try {
@@ -298,8 +317,45 @@ if ($wasRunning) {
     if ($state.lastApplyUtc) { try { $lastApplyUtc = [datetime]$state.lastApplyUtc } catch {} }
 }
 
+# ROADMAP 1.1: hybrid event model - a FileSystemWatcher on the settings.xml
+# folder reacts to overwrites IMMEDIATELY instead of waiting for the 5 s tick.
+# The events only set a flag; all decisions stay in the polling loop (FSW
+# buffer overflow also sets the flag -> forced reconciliation poll).
+$global:MG_SettingsDirty = $false
+$script:fsw = $null
+$script:fswPath = $null
+function Reset-SettingsWatcher {
+    # (re)arm the FileSystemWatcher for the CURRENT settings.xml location
+    try {
+        if ($script:fsw) { $script:fsw.EnableRaisingEvents = $false; $script:fsw.Dispose(); $script:fsw = $null }
+        # NOTE: [IO.Path]::GetDirectoryName/GetFileName, NOT Split-Path -LiteralPath
+        # (in PS 5.1 that combination is an ambiguous parameter set -> throws)
+        $dir = [IO.Path]::GetDirectoryName($cfg.settingsXml)
+        $leaf = [IO.Path]::GetFileName($cfg.settingsXml)
+        if (-not (Test-Path -LiteralPath $dir)) { return }
+        $script:fsw = New-Object System.IO.FileSystemWatcher
+        $script:fsw.Path = $dir
+        $script:fsw.Filter = $leaf
+        $script:fsw.NotifyFilter = [System.IO.NotifyFilters]'LastWrite, FileName, Size'
+        $script:fsw.EnableRaisingEvents = $true
+        Register-ObjectEvent $script:fsw 'Changed' -Action { $global:MG_SettingsDirty = $true } | Out-Null
+        Register-ObjectEvent $script:fsw 'Created' -Action { $global:MG_SettingsDirty = $true } | Out-Null
+        Register-ObjectEvent $script:fsw 'Renamed' -Action { $global:MG_SettingsDirty = $true } | Out-Null
+        Register-ObjectEvent $script:fsw 'Error'   -Action { $global:MG_SettingsDirty = $true } | Out-Null
+        $script:fswPath = $cfg.settingsXml
+        Log "[i] FileSystemWatcher armed on $dir\$leaf"
+    } catch { Log "[!] FSW unavailable - guard falls back to polling only: $_"; $script:fsw = $null }
+}
+Reset-SettingsWatcher
+
 while ($true) {
-    Start-Sleep -Seconds 5
+    # split sleep: a FSW event wakes the loop within 200 ms instead of 5 s
+    for ($sleepTick = 0; $sleepTick -lt 25; $sleepTick++) {
+        Start-Sleep -Milliseconds 200
+        if ($global:MG_SettingsDirty) { break }
+    }
+    $dirtyNow = $global:MG_SettingsDirty
+    $global:MG_SettingsDirty = $false
 
     # cooperative stop
     try { if ($stopEvent -and $stopEvent.WaitOne(0)) { Log 'stop requested (event)'; break } } catch {}
@@ -311,6 +367,9 @@ while ($true) {
             if ($fresh -and $fresh.settingsXml) { $cfg = $fresh; $SettingsXml = $fresh.settingsXml }
         }
         if (-not $cfg.settingsXml) { continue }
+
+        # re-arm the FSW when the settings.xml location changed (REVIEW: re-discovery)
+        if ($script:fswPath -ne $cfg.settingsXml) { Reset-SettingsWatcher }
 
         $procs    = @(Find-MatchingProcess -Patterns $cfg.gameProcesses)
         $running  = [bool]$procs
@@ -329,8 +388,10 @@ while ($true) {
         if ($launcher -and -not $script:wasLauncher) {
             Log "Majestic launcher started"
             $bs = Ensure-BinsRestored -Cfg $cfg
-            if ($bs -eq 'restored') { Log "vanilla bins restored before launcher patch" }
-            elseif ($bs -in @('partial', 'failed')) { Log "[!] vanilla bins $bs before launcher patch - error 1002 risk this launch" }
+            if ($bs -eq 'restored') { Log "vanilla bins restored before launcher patch"
+                Ev 'insurance.restored' 'before launcher patch' }
+            elseif ($bs -in @('partial', 'failed')) { Log "[!] vanilla bins $bs before launcher patch - error 1002 risk this launch"
+                Ev 'insurance.risk' $bs }
         }
         $script:wasLauncher = $launcher
 
@@ -446,7 +507,8 @@ while ($true) {
             Restore-VanillaBackup -Cfg $cfg | Out-Null
             # build the 1002 insurance: copy (never move) launcher bins to the
             # archive now that the game is closed - safe from the patcher race
-            if (Archive-VanillaBins -Cfg $cfg -StopCheck { $stopEvent.WaitOne(0) }) { Log "vanilla bins archived (copy, insurance against error 1002)" }
+            if (Archive-VanillaBins -Cfg $cfg -StopCheck { $stopEvent.WaitOne(0) }) { Log "vanilla bins archived (copy, insurance against error 1002)"
+                Ev 'bins.archived' 'exit-time copy' }
             Prune-BackupFiles -Pattern 'settings.golden.xml.old_*'
             if ($state.phase -ne 'UnknownSession') {
                 $state.phase = 'Idle'
@@ -475,12 +537,16 @@ while ($true) {
         # drift-guard: ONLY inside the launch window (Test-GuardActive).
         # Rollbacks here are foreign overwrites by Majestic/MG - they must NOT
         # disable adopt-on-exit: the user's own later changes are legitimate.
+        # ROADMAP 1.1: an FSW event ($dirtyNow) triggers the check immediately
+        # instead of waiting for the next full tick.
         if ((Test-GuardActive $sessionStart $GuardWindowSec $sessionGuard $running) -and
             ((Get-Date) - $lastGuardReapply).TotalSeconds -ge 10) {
+            if ($dirtyNow) { Log "guard: FSW event - immediate check" }
             $same = Test-SameSettings $cfg.settingsXml $Golden
             if ($same -eq $false) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "session guard: foreign overwrite in launch window - golden re-applied"
+                    Ev 'guard.rollback' 'foreign overwrite in launch window'
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                     $appliedThisSession = $true
                     $state.applied = $true
@@ -506,6 +572,7 @@ while ($true) {
     } catch {
         $errStreak++
         $lastErrAt = Get-Date
+        Ev 'error' ('streak=' + $errStreak)
         Log "[!] Error ($errStreak in a row): $_"
         if ($errStreak -ge 3) {
             # during a game session do NOT respawn: any spawn may steal focus and
