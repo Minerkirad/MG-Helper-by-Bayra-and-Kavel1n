@@ -1,0 +1,31 @@
+name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke harness (Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check.ps1
+
+      - name: Pester 5 suite
+        shell: powershell
+        run: |
+          Install-Module Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
+          Import-Module Pester -MinimumVersion 5.0
+          Invoke-Pester -Path .\tests -Output Minimal
+
+      - name: PSScriptAnalyzer (advisory)
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -Settings PSScriptAnalyzerSettings.psd1
+          $r | Format-Table -AutoSize
+          if ($r) { exit 1 }
