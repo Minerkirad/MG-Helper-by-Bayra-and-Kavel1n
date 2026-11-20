@@ -54,6 +54,9 @@ $extra += ""
 $extra += "=== CONFIG.JSON (ключи и версии; пути маскируются) ==="
 $extra += (Get-Content (Join-Path $watcherDir 'config.json') -Raw -ErrorAction SilentlyContinue)
 $extra += ""
+$extra += "=== СОБЫТИЯ (events.jsonl, последние 20) ==="
+$extra += (Get-Content (Join-Path $watcherDir 'events.jsonl') -Tail 20 -ErrorAction SilentlyContinue)
+$extra += ""
 $extra += "=== WATCHER.LOG (последние 40 строк) ==="
 $extra += (Get-Content (Join-Path $watcherDir 'watcher.log') -Tail 40 -ErrorAction SilentlyContinue)
 $extra += ""
