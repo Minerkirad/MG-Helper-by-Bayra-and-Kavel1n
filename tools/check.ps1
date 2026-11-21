@@ -333,6 +333,13 @@ if ($mgTxt2 -notmatch 'Show-Onboarding') { Bad 'menu: onboarding wizard missing 
 $cfgTxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
 if ($cfgTxt -notmatch 'autoUpdate') { Bad 'common: autoUpdate config flag missing (ROADMAP 5.2)' }
 if ($wtxt -notmatch 'auto-update') { Bad 'watcher: opt-in silent auto-update missing (ROADMAP 5.2)' }
+# tray resilience guards (user crash report: GDI leak + no auto-restart)
+$trayTxt = Get-Content (Join-Path $repo 'MG-Helper-Tray.cs') -Raw
+if ($trayTxt -notmatch 'iconGray') { Bad 'tray: icons must be cached, not recreated every poll (GDI leak)' }
+if ($trayTxt -match 'tray\.Icon = MakeIcon') { Bad 'tray: icon is recreated every poll (GDI handle leak)' }
+if ($trayTxt -notmatch 'tray_exit\.flag') { Bad 'tray: deliberate exit must write a flag (watcher would restart it)' }
+if ($wtxt -notmatch 'tray icon restarted') { Bad 'watcher: tray auto-restart missing (user crash report)' }
+if ($wtxt -notmatch 'tray_exit\.flag') { Bad 'watcher: tray restart must respect the deliberate-exit flag' }
 # ROADMAP phase 3 (strangler) guards
 if (-not (Test-Path (Join-Path $repo 'MGCore.cs'))) { Bad 'repo: MGCore.cs missing (ROADMAP phase 3)' }
 $coreTxt = Get-Content (Join-Path $repo 'MGCore.cs') -Raw
