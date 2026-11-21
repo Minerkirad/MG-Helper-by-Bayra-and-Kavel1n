@@ -16,6 +16,7 @@ static class Program
     static string helperDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MG_Helper");
     static NotifyIcon tray;
+    static Icon iconGray, iconGreen, iconRed;
     static string lastSeenEventLine = null;
     static string cursorFile = Path.Combine(helperDir, "tray_cursor.txt");
 
@@ -39,11 +40,24 @@ static class Program
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Проверить обновления", null, (s, e) => RunScript("update-helper.ps1"));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Выход (иконка)", null, (s, e) => { tray.Visible = false; Application.Exit(); });
+        menu.Items.Add("Выход (иконка)", null, (s, e) =>
+        {
+            // REVIEW: намеренный выход - пишем флаг, чтобы watcher не перезапускал трей
+            try { File.WriteAllText(Path.Combine(helperDir, "tray_exit.flag"), DateTime.Now.ToString("o")); } catch { }
+            tray.Visible = false;
+            Application.Exit();
+        });
+
+        // иконки создаются ОДИН раз на состояние (GDI-хэндлы не пересоздаются
+        // каждый опрос - пересоздание каждые 5 с течёт по GDI-хэндлам и убивает
+        // трей через ~14 часов; найдено по падению на машине пользователя)
+        iconGray = MakeIcon(Color.Gray);
+        iconGreen = MakeIcon(Color.Green);
+        iconRed = MakeIcon(Color.Red);
 
         tray = new NotifyIcon
         {
-            Icon = MakeIcon(Color.Gray),
+            Icon = iconGray,
             Text = "MG Helper - запуск...",
             ContextMenuStrip = menu,
             Visible = true
@@ -61,6 +75,16 @@ static class Program
 
     static void Poll()
     {
+        // каждая итерация обёрнута: любой сбой опроса не должен убить трей
+        try
+        {
+            PollInner();
+        }
+        catch { }
+    }
+
+    static void PollInner()
+    {
         bool ready = File.Exists(Path.Combine(helperDir, "watcher.ready"));
         string phase = "Idle";
         try
@@ -71,6 +95,7 @@ static class Program
         }
         catch { }
 
+        // иконка переиспользуется из кэша (3 состояния) - GDI-хэндлы не текут
         Color color;
         string tip;
         if (!ready && !WatchProcessAlive())
@@ -91,7 +116,7 @@ static class Program
 
         try
         {
-            tray.Icon = MakeIcon(color);
+            tray.Icon = (color == Color.Red) ? iconRed : iconGreen;
             tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
         }
         catch { }
