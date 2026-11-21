@@ -311,6 +311,7 @@ else {
 # ------------------------------------------------------------
 $readyFile = Join-Path $HelperDir 'watcher.ready'
 Remove-Item -LiteralPath $readyFile -Force -ErrorAction SilentlyContinue   # stale marker from a previous run
+Remove-Item -LiteralPath (Join-Path $HelperDir 'tray_exit.flag') -Force -ErrorAction SilentlyContinue   # fresh install: tray comes back
 Start-ScheduledTask -TaskName 'MG_Helper_Watcher'
 $ready = $false
 for ($w = 0; $w -lt 30; $w++) {
