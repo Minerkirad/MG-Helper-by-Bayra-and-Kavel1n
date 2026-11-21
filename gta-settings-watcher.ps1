@@ -341,6 +341,7 @@ $lastGuardReapply = [datetime]::MinValue
 $lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
 $appliedThisSession = $false           # did WE successfully apply golden in THIS session?
 $script:restartPending = $false
+$script:lastTrayStart = [datetime]::MinValue   # tray auto-restart rate limiter
 # MG-CR-021: ready handshake - the installer waits for this marker instead of
 # guessing from process existence. Stale markers are refreshed below.
 $ReadyFile = Join-Path $HelperDir 'watcher.ready'
@@ -408,6 +409,25 @@ while ($true) {
 
         # re-arm the FSW when the settings.xml location changed (REVIEW: re-discovery)
         if ($script:fswPath -ne $cfg.settingsXml) { Reset-SettingsWatcher }
+
+        # tray resilience (user report: tray crashed and stayed dead): if the
+        # tray was installed (Startup lnk exists) and its exe is present, and
+        # the user did not deliberately exit (no exit flag) - restart it.
+        # Cheap checks only; restart rate-limited to once per 60 s.
+        try {
+            $trayExe2 = Join-Path $HelperDir 'MG-Helper-Tray.exe'
+            $trayLnk2 = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Startup\MG Helper Tray.lnk'
+            $trayFlag2 = Join-Path $HelperDir 'tray_exit.flag'
+            if ((Test-Path -LiteralPath $trayExe2) -and (Test-Path -LiteralPath $trayLnk2) -and
+                (-not (Test-Path -LiteralPath $trayFlag2)) -and
+                (-not (Get-Process -Name 'MG-Helper-Tray' -ErrorAction SilentlyContinue)) -and
+                ((Get-Date) - $script:lastTrayStart).TotalSeconds -ge 60) {
+                Start-Process -FilePath $trayExe2 -WorkingDirectory $HelperDir -ErrorAction Stop
+                $script:lastTrayStart = Get-Date
+                Log "[i] tray icon restarted (was not running)"
+                Ev 'tray.restart' ''
+            }
+        } catch { }
 
         $procs    = @(Find-MatchingProcess -Patterns $cfg.gameProcesses)
         $running  = [bool]$procs
