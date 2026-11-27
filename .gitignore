@@ -14,3 +14,5 @@ Thumbs.db
 desktop.ini
 *.swp
 *~
+# Telegram bot token must never be committed (env MG_TG_TOKEN or DataRoot\telegram.json)
+telegram.json

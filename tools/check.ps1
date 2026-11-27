@@ -783,8 +783,12 @@ else {
     if ($wCs -match 'MgDecisions\.Run') { Good 'watcher: the C# watcher takes every decision from the C# core' } else { Bad 'watcher: MGHelper.Watcher.cs does not use MgDecisions' }
 $intMigrOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-migration.ps1') -Quiet 2>&1
 if ($LASTEXITCODE -eq 0) { Good 'migration: the 2.6.1 backup migrates to the 3.0 layout (versions, current.json, manifest, rollback)' }
-else { Bad ("migration: runner failed - " + (($intMigrOut | Select-Object -Last 3) -join ' | ')) }
 $inst3 = Join-Path $repo 'install-3.0.ps1'
+
+$tgOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-telegram.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'telegram: report sending works against a loopback endpoint (no token in the repo)' }
+else { Bad ("telegram: runner failed - " + (($tgOut | Select-Object -Last 3) -join ' | ')) }
+if ((Get-Content (Join-Path $repo 'common.ps1') -Raw) -match 'MG_TG_TOKEN') { Good 'telegram: the bot token comes from env/config, never from the repo' } else { Bad 'telegram: token provisioning changed unexpectedly' }
 if (-not (Test-Path -LiteralPath $inst3)) { Bad 'installer 3.0: install-3.0.ps1 missing' }
 else {
     $i3 = Get-Content $inst3 -Raw

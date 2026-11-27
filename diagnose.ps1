@@ -1,7 +1,7 @@
 ﻿# Locates the deployed watcher and runs its -Diagnose mode.
 # Used as source for 5-diagnose.bat (EncodedCommand).
 # by Bayra & Kavel1n
-param([switch]$NoOpenReport)   # -NoOpenReport: не открывать Проводник (тесты/автоматизация)
+param([switch]$NoOpenReport, [switch]$Send)   # -Send: отправить отчёт в Telegram (если настроен)   # -NoOpenReport: не открывать Проводник (тесты/автоматизация)
 $host.UI.RawUI.WindowTitle = 'MG Helper Diagnose - by Bayra & Kavel1n'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
@@ -351,6 +351,21 @@ if ($mask) {
 
 Write-Host "=================================================="
 Write-Host "[+] Report saved: report_$stamp.txt (in the watcher folder)" -ForegroundColor Green
+# 3.0: опциональная отправка отчёта (токен вне репозитория, см. common.ps1 Get-TelegramConfig)
+if ($common -or (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue)) {
+    $wantSend = $Send
+    if (-not $wantSend -and (Get-Command Test-TelegramConfigured -ErrorAction SilentlyContinue) -and (Test-TelegramConfigured)) {
+        $autoFile = Join-Path $watcherDir 'config.json'
+        $autoSend = $false
+        try { $autoSend = [bool](Get-Content -LiteralPath $autoFile -Raw | ConvertFrom-Json).autoSendReports } catch { }
+        if ($autoSend) { $wantSend = $true }
+    }
+    if ($wantSend -and (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue)) {
+        $sent = Send-TelegramDocument -Path $reportPath -Caption ("MG Helper {0} - {1}" -f (Get-PkgVersion), $env:COMPUTERNAME)
+        if ($sent.ok) { Write-Host '[+] Отчёт отправлен в Telegram.' -ForegroundColor Green }
+        else { Write-Host ("[!] Отчёт НЕ отправлен: " + $(if ($sent.error) { $sent.error } else { "HTTP $($sent.status)" })) -ForegroundColor Yellow }
+    }
+}
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
 if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray }
 else { Write-Host "[i] ВНИМАНИЕ: отчёт содержит ПОЛНЫЕ пути с именем пользователя." -ForegroundColor Yellow }

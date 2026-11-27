@@ -690,6 +690,62 @@ function Test-InstallDowngrade {
         return (([version]$LiveVersion).CompareTo([version]$PackageVersion) -gt 0)
     } catch { return $false }
 }
+# ------------------------------------------------------------
+# Отправка отчётов в Telegram (опция, выключена по умолчанию).
+# Токен НЕ хранится в репозитории: только env MG_TG_TOKEN/MG_TG_CHAT или
+# %LOCALAPPDATA%\MG_Helper\telegram.json {"token":"...","chatId":"..."}.
+# Сеть вызывается только явной командой; при отсутствии настроек функция молчит.
+# ------------------------------------------------------------
+function Get-TelegramConfig {
+    $token = $env:MG_TG_TOKEN
+    $chat = $env:MG_TG_CHAT
+    if (-not $token -or -not $chat) {
+        $f = Join-Path $script:HelperDir 'telegram.json'
+        if (Test-Path -LiteralPath $f) {
+            try {
+                $cfg = Get-Content -LiteralPath $f -Raw | ConvertFrom-Json
+                if ($cfg.token) { $token = [string]$cfg.token }
+                if ($cfg.chatId) { $chat = [string]$cfg.chatId }
+            } catch { }
+        }
+    }
+    if (-not $token -or -not $chat) { return $null }
+    return @{ token = $token; chatId = $chat }
+}
+
+function Send-TelegramDocument {
+    # multipart/form-data через .NET HttpClient (PS 5.1 без -Form). -ApiBase нужен тестам.
+    param([string]$Path, [string]$Caption = '', [string]$ApiBase = 'https://api.telegram.org')
+    if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $false; error = "файл не найден: $Path" } }
+    $cfg = Get-TelegramConfig
+    if (-not $cfg) { return @{ ok = $false; error = 'Telegram не настроен (нет MG_TG_TOKEN/MG_TG_CHAT и telegram.json)' } }
+    $client = $null
+    $content = $null
+    try {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+        # ::new(), а не New-Object: byte[] через New-Object раскладывается в аргументы (PS 5.1)
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds(60)
+        $content = [System.Net.Http.MultipartFormDataContent]::new()
+        $content.Add([System.Net.Http.StringContent]::new($cfg.chatId), 'chat_id')
+        if ($Caption) { $content.Add([System.Net.Http.StringContent]::new($Caption), 'caption') }
+        $bytes = [IO.File]::ReadAllBytes($Path)
+        $fileContent = [System.Net.Http.ByteArrayContent]::new($bytes)
+        $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('text/plain')
+        $content.Add($fileContent, 'document', [IO.Path]::GetFileName($Path))
+        $url = $ApiBase.TrimEnd('/') + '/bot' + $cfg.token + '/sendDocument'
+        $response = $client.PostAsync($url, $content).GetAwaiter().GetResult()
+        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        return @{ ok = [bool]$response.IsSuccessStatusCode; status = [int]$response.StatusCode; body = $body }
+    } catch {
+        return @{ ok = $false; error = $_.Exception.Message }
+    } finally {
+        if ($content) { try { $content.Dispose() } catch {} }
+        if ($client) { try { $client.Dispose() } catch {} }
+    }
+}
+
+function Test-TelegramConfigured { return [bool](Get-TelegramConfig) }
 function Get-XmlSignature {
     # structural signature of an XML document: every element becomes
     # "path [attr1=v1;attr2=v2]" with attributes SORTED - whitespace and

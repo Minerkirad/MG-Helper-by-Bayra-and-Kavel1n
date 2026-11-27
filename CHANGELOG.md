@@ -4,6 +4,13 @@ All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [3.0.0] - 2026-11-27
+
+### Added
+- Telegram reports (opt-in): diagnose.ps1 -Send uploads the generated report to a
+  bot via sendDocument; menu [8] sends automatically when configured. The token is
+  never in the repo - env MG_TG_TOKEN/MG_TG_CHAT or DataRoot\telegram.json, and
+  config.json "autoSendReports" makes it automatic. tools/integration-telegram.ps1
+  verifies the multipart payload against a loopback server (no network, no token).
 ### Notes
 - The legacy PS watcher stays in the 3.0.0 package (ADR-005): the C# watcher is the
   default, the PS one is started by explicit request and both share the single-instance

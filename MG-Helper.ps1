@@ -258,7 +258,11 @@ while ($true) {
         }
         '6' { Run-Step "Clean cache" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'clean-majestic-cache.ps1') } }
         '7' { Run-Step "Restore MG snapshot" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'restore-mg-snapshot.ps1') } }
-        '8' { Run-Step "Diagnose" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'diagnose.ps1') } }
+        '8' { Run-Step "Diagnose" {
+        $dargs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $root 'diagnose.ps1'))
+        if (Get-Command Test-TelegramConfigured -ErrorAction SilentlyContinue) { if (Test-TelegramConfigured) { $dargs += '-Send' } }
+        & powershell @dargs
+    } }
         '9' { Run-Step "Repair" { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'repair.ps1') } }
         '10' {
             if (Confirm-It 'Удалить watcher и автозапуск? Бэкапы и эталон останутся.') {
