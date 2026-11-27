@@ -15,6 +15,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -39,6 +40,7 @@ public static class MgHelperUi
     private static System.Windows.Forms.Timer pollTimer;
     private static bool smoke;
     private static string shotDir;
+    private static string sourceLogged;
 
     [STAThread]
     public static int Main(string[] args)
@@ -306,18 +308,58 @@ public static class MgHelperUi
         return ReadText(path, 0) ?? "";
     }
 
+    private static string PipeStatusJson()
+    {
+        string pipeName = Environment.GetEnvironmentVariable("MG_HELPER_DIR") != null ? "MG_Helper_test" : "MG_Helper";
+        try
+        {
+            using (NamedPipeClientStream pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut))
+            {
+                pipe.Connect(1500);
+                // do not dispose the writer/reader: their Dispose closes the pipe itself,
+                // and the second close throws ObjectDisposedException (verified live)
+                StreamWriter writer = new StreamWriter(pipe, new UTF8Encoding(false));
+                StreamReader reader = new StreamReader(pipe, new UTF8Encoding(false));
+                writer.AutoFlush = true;
+                writer.WriteLine("{\"cmd\":\"status\"}");
+                string line = reader.ReadLine();
+                return string.IsNullOrEmpty(line) ? null : line;
+            }
+        }
+        catch { return null; }
+    }
+
     private static void PushState()
     {
         if (web == null || web.CoreWebView2 == null) return;
+
         try
         {
             string healthJson = ReadText(Path.Combine(dataRoot, "watcher.health.json"), 0);
             string stateJson = ReadText(Path.Combine(dataRoot, "state.json"), 0);
             string configText = ReadConfigText();
             Dictionary<string, object> health = ParseFlatJson(healthJson);
+            // живой опрос через Named Pipe; файл health остаётся резервом (ADR-003)
+            bool fromPipe = false;
+            string pipeLine = PipeStatusJson();
+            if (!string.IsNullOrEmpty(pipeLine))
+            {
+                Dictionary<string, object> pipeMap = ParseFlatJson(pipeLine);
+                if (Get(pipeMap, "ok") == "true" && Get(pipeMap, "lastHeartbeatUtc").Length > 0)
+                {
+                    health = pipeMap;
+                    healthJson = pipeLine;
+                    fromPipe = true;
+                }
+            }
             Dictionary<string, object> st = ParseFlatJson(stateJson);
             Dictionary<string, object> cfg = ParseFlatJson(configText);
             double age = HealthAgeSec(health);
+            if (sourceLogged != (fromPipe ? "pipe" : "file"))
+            {
+                sourceLogged = fromPipe ? "pipe" : "file";
+                Trace("state source=" + sourceLogged + " status=" + Get(health, "status"));
+            }
             string version = UiVersion;
             string vf = Path.Combine(appDir, "version.json");
             string vtext = ReadText(vf, 0);
@@ -332,7 +374,7 @@ public static class MgHelperUi
             sb.Append("\"health\":").Append(healthJson == null ? "null" :
                 "{\"status\":\"" + Json(Get(health, "status")) + "\",\"phase\":\"" + Json(Get(health, "phase")) +
                 "\",\"pid\":" + Digits(Get(health, "pid")) + ",\"ageSec\":" + (age < 0 ? "null" : Math.Round(age, 1).ToString(CultureInfo.InvariantCulture)) +
-                ",\"lastHeartbeatUtc\":\"" + Json(Get(health, "lastHeartbeatUtc")) + "\"}").Append(",");
+                ",\"lastHeartbeatUtc\":\"" + Json(Get(health, "lastHeartbeatUtc")) + "\",\"source\":\"" + (fromPipe ? "pipe" : "file") + "\"}").Append(",");
             sb.Append("\"state\":{\"phase\":\"").Append(Json(Get(st, "phase"))).Append("\",\"applied\":").Append(Get(st, "applied") == "true" ? "true" : "false");
             sb.Append(",\"guardRollbacks\":").Append(Digits(Get(st, "guardRollbacks")));
             sb.Append(",\"gamePid\":").Append(Digits(Get(st, "gamePid")));

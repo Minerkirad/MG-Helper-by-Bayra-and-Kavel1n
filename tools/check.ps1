@@ -7,7 +7,7 @@ $fail = $false
 function Bad($m)  { Write-Host "[FAIL] $m" -ForegroundColor Red;  $script:fail = $true }
 function Good($m) { Write-Host "[ok] $m"   -ForegroundColor Green }
 
-$ps1 = Get-ChildItem $repo -Filter '*.ps1' -File -Recurse | Where-Object { $_.Name -ne 'rebuild-bats.ps1' }
+$ps1 = Get-ChildItem $repo -Filter '*.ps1' -File -Recurse | Where-Object { $_.Name -ne 'rebuild-bats.ps1' -and $_.FullName -notmatch '\\release\\' }   # release\stage - копии артефактов, их не линтуем
 
 # 1. syntax + duplicate functions
 foreach ($f in $ps1) {

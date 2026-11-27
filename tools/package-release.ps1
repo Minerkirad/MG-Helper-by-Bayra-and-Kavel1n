@@ -116,7 +116,14 @@ Write-Host "[+] заметки: $notes" -ForegroundColor Green
 
 if (-not $Upload) {
     Write-Host '[*] без -Upload публикация не выполнялась'
-    Write-Output $zip
+    # тело релиза всегда соответствует локальным заметкам (хэши не расходятся с ассетами)
+$bodyNow = if (Test-Path -LiteralPath $notes) { [IO.File]::ReadAllText($notes) } else { '' }
+try {
+    $patch = @{ body = $bodyNow } | ConvertTo-Json -Depth 3
+    $null = Invoke-RestMethod -Method Patch -Uri "https://api.github.com/repos/$Repo/releases/$($existing.id)" -Headers $hdr -Body $patch -ContentType 'application/json; charset=utf-8' -TimeoutSec 60
+    Write-Host '[+] обновляю тело релиза (хэши в тексте)' -ForegroundColor DarkGray
+} catch { Write-Host "[!] тело релиза не обновлено: $($_.Exception.Message)" -ForegroundColor Yellow }
+Write-Output $zip
     exit 0
 }
 
@@ -176,4 +183,11 @@ foreach ($asset in $assets) {
     $res = Invoke-RestMethod -Method Post -Uri "https://uploads.github.com/repos/$Repo/releases/$($existing.id)/assets?name=$name" -Headers ($hdr + @{ 'Content-Type' = 'application/octet-stream' }) -Body $bytes -ContentType 'application/octet-stream' -TimeoutSec 600
     Write-Host ("[+] загружен asset: {0} ({1} b, state={2})" -f $res.name, $res.size, $res.state) -ForegroundColor Green
 }
+# тело релиза всегда соответствует локальным заметкам (хэши не расходятся с ассетами)
+$bodyNow = if (Test-Path -LiteralPath $notes) { [IO.File]::ReadAllText($notes) } else { '' }
+try {
+    $patch = @{ body = $bodyNow } | ConvertTo-Json -Depth 3
+    $null = Invoke-RestMethod -Method Patch -Uri "https://api.github.com/repos/$Repo/releases/$($existing.id)" -Headers $hdr -Body $patch -ContentType 'application/json; charset=utf-8' -TimeoutSec 60
+    Write-Host '[+] обновляю тело релиза (хэши в тексте)' -ForegroundColor DarkGray
+} catch { Write-Host "[!] тело релиза не обновлено: $($_.Exception.Message)" -ForegroundColor Yellow }
 Write-Output $zip

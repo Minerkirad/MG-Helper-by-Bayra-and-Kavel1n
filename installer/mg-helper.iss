@@ -44,7 +44,8 @@ Name: "desktopicon"; Description: "Ярлык на рабочем столе"; G
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Run]
-Filename: "{app}\MGHelper.exe"; Description: "Запустить {#AppName}"; Flags: nowait postinstall skipifsilent
+; финализация: переключить current.json, обновить скрипты в DataRoot, автозапуск, старт приложения
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\install-3.1.ps1"" -Version {#AppVersion} -Quiet"; Flags: runhidden waituntilterminated; StatusMsg: "Настраиваю MG Helper (версия, автозапуск)…"
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN MG_Helper_Watcher"; Flags: runhidden; RunOnceId: "stopwatcher"
