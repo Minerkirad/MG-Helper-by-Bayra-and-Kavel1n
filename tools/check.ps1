@@ -789,6 +789,9 @@ $tgOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tool
 if ($LASTEXITCODE -eq 0) { Good 'telegram: report sending works against a loopback endpoint (no token in the repo)' }
 else { Bad ("telegram: runner failed - " + (($tgOut | Select-Object -Last 3) -join ' | ')) }
 if ((Get-Content (Join-Path $repo 'common.ps1') -Raw) -match 'MG_TG_TOKEN') { Good 'telegram: the bot token comes from env/config, never from the repo' } else { Bad 'telegram: token provisioning changed unexpectedly' }
+$uiOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-ui.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'ui: MGHelper.exe renders the WebView2 page, bridges to the host and exits on --smoke' }
+else { Bad ("ui: smoke failed - " + (($uiOut | Select-Object -Last 3) -join ' | ')) }
 if (-not (Test-Path -LiteralPath $inst3)) { Bad 'installer 3.0: install-3.0.ps1 missing' }
 else {
     $i3 = Get-Content $inst3 -Raw
