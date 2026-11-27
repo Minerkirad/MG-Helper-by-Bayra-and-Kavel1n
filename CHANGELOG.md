@@ -3,6 +3,18 @@
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+### Added
+- Contracts (MG3-011): `docs\contracts\` now holds JSON Schemas for the three
+  formats that cross a process boundary - `state.json`, `watcher.health.json` and
+  one `events.jsonl` line - plus `tools\validate-contracts.ps1`, a dependency-free
+  validator that runs under PowerShell 5.1 (the subset of JSON Schema the project
+  uses). `tools\check.ps1` gained six contract checks: the schemas themselves, a
+  fresh health file, a health file without `status` (must be rejected), the
+  `Read-MgState` defaults, a real event line, and an unknown event name (must be
+  rejected). These are the file/event levels the 3.0 parity runner compares, so
+  "same output" now means "same meaning" instead of "same text".
+
 ## [2.6.1] - 2026-11-27
 ### Fixed
 - Adopt is opt-in: `allowAdopt` (default `false`) is the only switch, `onExit`

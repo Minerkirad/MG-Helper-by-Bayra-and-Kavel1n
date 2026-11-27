@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/health.schema.json",
+  "title": "watcher.health.json",
+  "description": "Heartbeat of the PS watcher (MG3-002). Written atomically every ~5 s and on every phase change into %LOCALAPPDATA%\\MG_Helper. Consumers (tray, diagnose.ps1) decide liveness ONLY by the age of lastHeartbeatUtc: <=15 s fresh, 15-30 s stale, >30 s or no file dead. watcher.ready is NOT proof of liveness.",
+  "type": "object",
+  "required": ["schemaVersion", "pid", "processStartUtc", "version", "status", "phase", "lastHeartbeatUtc", "sequence"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Bump only with a breaking change; readers must treat unknown versions as Unknown, never as Healthy."
+    },
+    "pid": { "type": "integer", "minimum": 1, "description": "PID of the powershell.exe running gta-settings-watcher.ps1." },
+    "processStartUtc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T", "description": "Start time of that PID in UTC: a recycled PID produces a different value." },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+", "description": "Package version (version.json)." },
+    "status": { "enum": ["starting", "running", "stopping"], "description": "starting = init not finished (Degraded, not Healthy); stopping = normal exit in progress." },
+    "phase": { "enum": ["Idle", "InGame", "UnknownSession"], "description": "Mirror of state.json phase. UnknownSession means protection is off for this session and must be visible in the UI." },
+    "gamePid": { "type": ["integer", "null"], "minimum": 1, "description": "PID of the detected game process, or null outside a session." },
+    "lastHeartbeatUtc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T", "description": "UTC timestamp of the last write; the only liveness signal." },
+    "sequence": { "type": "integer", "minimum": 0, "description": "Monotonic counter of this watcher process; a restart resets it (processStartUtc changes too)." },
+    "lastErrorCode": { "type": ["string", "null"], "description": "Last MG-E-xxxx code written to the log, or an empty string when none." }
+  }
+}

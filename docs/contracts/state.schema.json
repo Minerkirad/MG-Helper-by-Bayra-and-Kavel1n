@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/state.schema.json",
+  "title": "state.json",
+  "description": "Persistent watcher state machine. Additive fields are allowed (schema stays 2, readers ignore what they do not know); changing or removing a field is a breaking change and needs schema 3. Read through Read-MgState, which falls back to defaults on a torn or foreign file - that is what puts a running game into SAFE MODE instead of a trusted session.",
+  "type": "object",
+  "required": ["schema", "phase"],
+  "properties": {
+    "schema": { "const": 2, "description": "State format version. Readers accept only 2; anything else is treated as untrusted." },
+    "phase": {
+      "enum": ["Idle", "InGame", "UnknownSession"],
+      "description": "Idle = no session; InGame = we track a session (takeover checks the PID); UnknownSession = the game was already running when the watcher started, so nothing is applied and nothing is adopted."
+    },
+    "gamePid": { "type": ["integer", "null"], "minimum": 1, "description": "PID the session belongs to. A new session is declared only when THIS pid is gone." },
+    "gamePath": { "type": ["string", "null"], "description": "Full path of the game exe at launch: the PID-reuse guard in takeover." },
+    "sessionStart": { "type": ["string", "null"], "description": "UTC ISO-8601 start of the session. Compared only after ConvertTo-UtcTime." },
+    "lastApplyUtc": { "type": ["string", "null"], "description": "UTC mtime of settings.xml right after OUR last write. 'Changed after us' means mtime > lastApplyUtc + 2 s, both in UTC." },
+    "applied": { "type": "boolean", "description": "Did WE successfully apply the golden in this session? Adopt is refused when false." },
+    "guardRollbacks": { "type": "integer", "minimum": 0, "description": "Foreign overwrites rolled back in this session." },
+    "restarts": { "type": "integer", "minimum": 0, "description": "Self-restart budget used in the last 30 minutes." }
+  }
+}

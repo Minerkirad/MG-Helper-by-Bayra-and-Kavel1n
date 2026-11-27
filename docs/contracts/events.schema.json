@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/events.schema.json",
+  "title": "events.jsonl line",
+  "description": "One JSON object per line in events.jsonl (rotated at 1 MB). Names are a contract: the tray maps them to balloons and diagnose timelines read them, so a rename is a breaking change. Unknown names are ignored by readers.",
+  "type": "object",
+  "required": ["ts", "phase", "event"],
+  "properties": {
+    "ts": { "type": "string", "description": "Local ISO-8601 timestamp of the write." },
+    "phase": { "type": "string", "description": "State phase at the moment of the event." },
+    "event": {
+      "enum": [
+        "watcher.start", "watcher.ready", "watcher.stop",
+        "golden.applied", "golden.mismatch", "adopt.accepted", "apply.failed",
+        "session.start", "session.end", "session.unknown",
+        "guard.rollback", "guard.window_expired",
+        "insurance.restored", "insurance.risk", "bins.archived",
+        "tray.restart", "auto-update.start", "error"
+      ],
+      "description": "Event name. golden.applied carries launch|reapply|guard|exit-restore in data; session.* carry the pid or a reason."
+    },
+    "data": { "type": "string", "description": "Short payload, never a user path (see SECURITY.md)." }
+  }
+}

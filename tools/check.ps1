@@ -661,6 +661,37 @@ if ($w26 -notmatch 'stop\.request') { Bad 'watcher 2.6.1: file-based stop fallba
 $mgMenu = Get-Content (Join-Path $repo 'MG-Helper.ps1') -Raw
 if ($mgMenu -notmatch 'stop\.request') { Bad 'menu 2.6.1: Restart-Watcher has no stop.request fallback' }
 
+# 11w. 2.6.1/MG3-011: форматы зафиксированы схемами в docs\contracts
+. (Join-Path $repo 'tools\validate-contracts.ps1')
+$schemaProblems = Test-SchemaSelfTest
+if (@($schemaProblems).Count -eq 0) { Good 'contracts: all schemas parse and carry $schema/$id/title' } else { Bad ("contracts: schema problems - " + (@($schemaProblems) -join '; ')) }
+$healthSchema = Get-ContractSchema 'health'
+$stateSchema = Get-ContractSchema 'state'
+$eventsSchema = Get-ContractSchema 'events'
+# a) свежий health обязан соответствовать схеме, испорченный - нет
+$hm2 = Join-Path $sandbox 'contracts'
+New-Item -ItemType Directory -Force -Path $hm2 | Out-Null
+$oldDir = $script:HelperDir; $script:HelperDir = $hm2
+$null = Write-WatcherHealth -Status 'running' -Phase 'InGame' -GamePid 4242 -Version '2.6.1' -Sequence 3
+$script:HelperDir = $oldDir
+$healthObj = Get-Content (Join-Path $hm2 'watcher.health.json') -Raw | ConvertFrom-Json
+$hv = Test-JsonAgainstSchema -Data $healthObj -Schema $healthSchema
+if (@($hv).Count -eq 0) { Good 'contracts: a real watcher.health.json validates against health.schema.json' } else { Bad ("contracts: health.json rejected - " + (@($hv) -join '; ')) }
+$brokenHealth = Get-Content (Join-Path $hm2 'watcher.health.json') -Raw | ConvertFrom-Json
+$brokenHealth.PSObject.Properties.Remove('status')
+$hb = Test-JsonAgainstSchema -Data $brokenHealth -Schema $healthSchema
+if (@($hb).Count -gt 0) { Good 'contracts: a health file without status is rejected (not silently Healthy)' } else { Bad 'contracts: health without status passed validation' }
+# b) дефолтное состояние (то, во что Read-MgState превращает битый state.json) валидно
+$defState = (Get-DefaultState | ConvertTo-Json -Depth 4 | ConvertFrom-Json)
+$sv = Test-JsonAgainstSchema -Data $defState -Schema $stateSchema
+if (@($sv).Count -eq 0) { Good 'contracts: Read-MgState defaults validate against state.schema.json' } else { Bad ("contracts: state defaults rejected - " + (@($sv) -join '; ')) }
+# c) строка events.jsonl валидна, неизвестное имя события - нет
+$okEvent = ([ordered]@{ ts = (Get-Date).ToString('o'); phase = 'InGame'; event = 'golden.applied'; data = 'launch' } | ConvertTo-Json -Compress | ConvertFrom-Json)
+$ev1 = Test-JsonAgainstSchema -Data $okEvent -Schema $eventsSchema
+if (@($ev1).Count -eq 0) { Good 'contracts: a real events.jsonl line validates against events.schema.json' } else { Bad ("contracts: events line rejected - " + (@($ev1) -join '; ')) }
+$badEvent = ([ordered]@{ ts = (Get-Date).ToString('o'); phase = 'InGame'; event = 'golden.magic' } | ConvertTo-Json -Compress | ConvertFrom-Json)
+if (@(Test-JsonAgainstSchema -Data $badEvent -Schema $eventsSchema).Count -gt 0) { Good 'contracts: an unknown event name is rejected (tray would never show it)' } else { Bad 'contracts: unknown event name passed validation' }
+
 # 11u. Fault-injection (этап A ревью 3.0): сценарии, которые раньше не покрывались
 # a) битый/чужой state.json при живой игре -> defaults, watcher не падает,
 #    а состояние не считается доверенным (дальше он уходит в UnknownSession)
