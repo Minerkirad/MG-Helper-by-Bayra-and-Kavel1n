@@ -737,10 +737,20 @@ $script:HelperDir = $oldDir
 $paritySpec = Get-Content (Join-Path $repo 'tools\parity\expected.json') -Raw | ConvertFrom-Json
 $parityCount = @($paritySpec.scenarios).Count
 if ($parityCount -ge 20) { Good "parity: expected.json holds $parityCount scenarios (data, not code)" } else { Bad "parity: only $parityCount scenarios in expected.json" }
-$parityResults = @(Invoke-ParityScenarios -Quiet)
-$parityFailed = @($parityResults | Where-Object { -not $_.ok })
-if ($parityFailed.Count -eq 0) { Good "parity: all $($parityResults.Count) scenarios match expected.json (ps implementation)" }
-else { Bad ("parity: " + $parityFailed.Count + " diverged - " + (($parityFailed | ForEach-Object { "$($_.id): $($_.error)" }) -join ' | ')) }
+$parityBoth = Invoke-ParityBoth -Quiet
+if ($parityBoth.failedPs -eq 0 -and $parityBoth.failedCore -eq 0 -and @($parityBoth.crossMismatch).Count -eq 0) {
+    Good "parity: ps and the C# core both match expected.json ($($parityBoth.total) scenarios, cross-checked)"
+} else {
+    Bad ("parity: ps failed=$($parityBoth.failedPs), core failed=$($parityBoth.failedCore), cross-mismatch=" + (@($parityBoth.crossMismatch) -join ','))
+}
+$coreCsPath = Join-Path $repo 'CoreDecisions.cs'
+if (-not (Test-Path -LiteralPath $coreCsPath)) { Bad 'core: CoreDecisions.cs missing (C# decisions)' }
+else {
+    $coreCs = Get-Content $coreCsPath -Raw
+    if ($coreCs -match 'Microsoft\.Win32|RegistryKey|System\.Net\.|HttpClient|new Socket|Process\.Start') { Bad 'core: C# decisions must stay pure (registry/process/network call found)' }
+    else { Good 'core: C# decisions stay pure (no registry/process/network)' }
+    if ($instTxt5 -match 'CoreDecisions\.cs') { Good 'core: CoreDecisions.cs is in the installer deploy list' } else { Bad 'core: installer does not ship CoreDecisions.cs' }
+}
 
 # 11y. 3.0/этап 1: интеграционный прогон НАСТОЯЩЕГО watcher'а в песочнице
 # (MG_HELPER_DIR). Проверяет старт, сессию с процессом игры, выход и файловый стоп -

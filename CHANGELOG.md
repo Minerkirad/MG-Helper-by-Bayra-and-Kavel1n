@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 4 (C# core): CoreDecisions.cs implements the same decisions as the PS
+  core (adopt matrix, guard, golden selection, apply, XML compare, policy migration)
+  and answers MgCore.exe --decide <request.json> <response.json>. tools\parity.ps1
+  -Implementation core runs it against the same expected.json, and -Both compares the
+  two implementations field by field. Both are 21/21 and cross-checked on every
+  commit; a static check keeps the C# core free of registry/process/network calls.
+  Suite: 97 checks, ALL GREEN.
 - 3.0 stage 3 (PS core module): the eight pure decisions (adopt matrix, guard window,
   golden-key match, UTC conversion, state read/defaults, policy migration, settings key
   parsing) moved out of common.ps1 into `MgHelper.Core.ps1`, which common.ps1 dot-sources.

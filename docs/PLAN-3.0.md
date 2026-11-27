@@ -284,7 +284,8 @@ DoD: чек-лист §9 полностью; старый PS-watcher удалё�
 | 1. Testability | **закрыт** (MG3-021…023): `MG_HELPER_DIR`, `tools\integration.ps1`, 20 интеграционных проверок в `check.ps1` |
 | 2. Контракты+/ADR | **закрыт**: 7 схем (+config/golden_key/profiles/journal), 5 ADR, событийный уровень parity (`expected-events.json`) |
 | 3. PS core модуль | **закрыт**: `MgHelper.Core.ps1` (8 чистых решений), dot-source из common.ps1, деплой, parity через модуль |
-| 4. C# ядро | следующий |
-| 5–7 | не начаты |
+| 4. C# ядро | **закрыт**: `CoreDecisions.cs` → `MgCore.exe --decide`, parity `-Both` (21/21 у обеих реализаций + cross-check) |
+| 5. C# watcher + IPC | следующий |
+| 6–7 | не начаты |
 
 Обновлять таблицу в том же коммите, в котором закрывается этап.
