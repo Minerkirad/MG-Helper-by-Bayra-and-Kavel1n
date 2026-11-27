@@ -677,6 +677,19 @@ function Get-MgLiveStatus {
     $health = Get-WatcherHealth
     return @{ source = 'health'; data = $health.data; health = $health.status; ageSec = $health.ageSec }
 }
+# ------------------------------------------------------------
+# 3.0: защита от отката. Установщик не должен молча затирать более новую
+# установку старым пакетом (такое уже случалось: пакет 1.x перезаписал 2.6.1,
+# потому что проверки версии не было). Возвращает $true, если живая версия
+# СТРОГО новее пакета, и откат требует явного -Force.
+# ------------------------------------------------------------
+function Test-InstallDowngrade {
+    param([string]$LiveVersion, [string]$PackageVersion)
+    if (-not $LiveVersion -or -not $PackageVersion) { return $false }
+    try {
+        return (([version]$LiveVersion).CompareTo([version]$PackageVersion) -gt 0)
+    } catch { return $false }
+}
 function Get-XmlSignature {
     # structural signature of an XML document: every element becomes
     # "path [attr1=v1;attr2=v2]" with attributes SORTED - whitespace and

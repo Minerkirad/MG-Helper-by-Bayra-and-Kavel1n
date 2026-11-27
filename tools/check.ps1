@@ -760,7 +760,13 @@ else {
     }
 }
 
-# 11y. 3.0/этап 1: интеграционный прогон НАСТОЯЩЕГО watcher'а в песочнице
+# 3.0: откат на старую версию поверх новой запрещён (инцидент 2026-11-27: пакет 1.x
+# перезаписал живую установку 2.6.1, потому что проверки версии не было)
+if (Test-InstallDowngrade -LiveVersion '3.0.0' -PackageVersion '2.6.1') { Good 'downgrade: a newer live install blocks an older package' } else { Bad 'downgrade: newer live install did not block the package' }
+if (-not (Test-InstallDowngrade -LiveVersion '2.6.1' -PackageVersion '2.6.1')) { Good 'downgrade: the same version is allowed (reinstall/repair)' } else { Bad 'downgrade: same version considered a downgrade' }
+if (-not (Test-InstallDowngrade -LiveVersion '2.6.0' -PackageVersion '2.6.1')) { Good 'downgrade: an upgrade is always allowed' } else { Bad 'downgrade: upgrade considered a downgrade' }
+$instGuard = Get-Content (Join-Path $repo 'install-gta-watcher.ps1') -Raw
+if ($instGuard -match 'Test-InstallDowngrade' -and $instGuard -match '\$Force') { Good 'downgrade: the installer refuses unless -Force is passed' } else { Bad 'downgrade: installer has no version guard' }# 11y. 3.0/этап 1: интеграционный прогон НАСТОЯЩЕГО watcher'а в песочнице
 # (MG_HELPER_DIR). Проверяет старт, сессию с процессом игры, выход и файловый стоп -
 # то, чего не может ни один тест отдельных функций.
 $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

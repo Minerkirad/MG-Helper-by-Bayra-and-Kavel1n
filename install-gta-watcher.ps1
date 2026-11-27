@@ -2,6 +2,10 @@
 # Deploys the package to %LOCALAPPDATA%\MG_Helper, registers autostart
 # (logon + 10-min repeat), pins config, starts the watcher.
 # Single source of truth: the .ps1 files in THIS folder are deployed verbatim.
+[CmdletBinding()]
+# -Force разрешает осознанный откат на более старую версию (см. guard ниже)
+param([switch]$Force)
+
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $host.UI.RawUI.WindowTitle = 'MG Helper - by Bayra & Kavel1n'
@@ -37,6 +41,18 @@ if ($game) { Write-Host "[i] GTA install: $($game.root) ($($game.variant))" }
 # ------------------------------------------------------------
 $HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 New-Item -ItemType Directory -Force -Path $HelperDir | Out-Null
+
+# guard: refuse to overwrite a NEWER install unless -Force (downgrade protection)
+$packageVersion = '0.0.0'
+try { $packageVersion = [string](Get-Content -LiteralPath (Join-Path $PSScriptRoot 'version.json') -Raw | ConvertFrom-Json).version } catch {}
+$liveVersion = $null
+try { $liveVersion = [string](Get-Content -LiteralPath (Join-Path $HelperDir 'version.json') -Raw | ConvertFrom-Json).version } catch {}
+if ((Get-Command Test-InstallDowngrade -ErrorAction SilentlyContinue) -and (Test-InstallDowngrade -LiveVersion $liveVersion -PackageVersion $packageVersion) -and -not $Force) {
+    Write-Host "[!] В папке уже стоит версия $liveVersion, а пакет - $packageVersion." -ForegroundColor Red
+    Write-Host "    Затирать более новую установку старым пакетом нельзя. Осознанный откат: -Force." -ForegroundColor Yellow
+    Write-Host "    Резервные копии: backups\2.6.1 в рабочем каталоге разработки." -ForegroundColor DarkGray
+    exit 1
+}
 $legacyBackup = Join-Path (Split-Path $Settings) '_settings_backup'
 
 # migrate legacy golden if present

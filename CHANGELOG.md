@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- Downgrade protection: the installer refuses to overwrite a live install whose
+  version.json is NEWER than the package, unless -Force is passed, and prints where
+  the backups are. Added after an old 1.x package silently replaced a working 2.6.1
+  installation on the reference machine (user data survived; the 2.6.1 release was
+  reinstalled from the published ZIP in minutes). The decision itself is a pure
+  function, Test-InstallDowngrade, covered by four checks in the suite (104 total).
 - 3.0 stage 5a (Named Pipe IPC, ADR-003): HelperPipe.cs serves \\.\pipe\MG_Helper
   with an explicit security descriptor (current user only, NetworkSid denied) and four
   commands - status (returns watcher.health.json), stop, reload-config, apply-golden.
