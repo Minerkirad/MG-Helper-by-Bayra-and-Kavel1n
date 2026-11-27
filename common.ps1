@@ -794,16 +794,22 @@ function Show-SettingsDiff {
 }
 
 function Get-WatcherProcess {
+    # 3.0: watcher'ов два вида - PS (powershell + gta-settings-watcher.ps1) и C#
+    # (MGHelper.Watcher.exe). Диагностика и меню должны видеть оба, иначе после
+    # перехода на C# они честно, но неверно говорят "процесс не найден".
     # REVIEW-#9: ONE source of truth for "which processes run the watcher".
     # Excludes this process and -Diagnose runs (diagnose must not be killed by
     # install/repair, nor counted as a live watcher by the menu).
     param([int]$ExcludePid = $PID)
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -OperationTimeoutSec 15 -ErrorAction SilentlyContinue |
+    $ps = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -OperationTimeoutSec 15 -ErrorAction SilentlyContinue |
         Where-Object {
             $_.ProcessId -ne $ExcludePid -and
             $_.CommandLine -match 'gta-settings-watcher\.ps1' -and
             $_.CommandLine -notmatch '-Diagnose'
-        }
+        })
+    $cs = @(Get-CimInstance Win32_Process -Filter "Name='MGHelper.Watcher.exe'" -OperationTimeoutSec 15 -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -ne $ExcludePid })
+    return @($ps + $cs)
 }
 
 function Get-LatestBinArchive {

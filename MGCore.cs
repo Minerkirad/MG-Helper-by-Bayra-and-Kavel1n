@@ -1,4 +1,4 @@
-﻿// MG Core (beta) - C# strangler core v1 - by Bayra & Kavel1n
+// MG Core (beta) - C# strangler core v1 - by Bayra & Kavel1n
 // ROADMAP phase 3, strangler step 1: a minimal compiled core that coexists
 // with the PS watcher and is selected by config.json "coreMode": "csharp"
 // (installer points the scheduled task here). Everything it writes is

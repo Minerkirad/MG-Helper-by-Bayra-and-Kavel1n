@@ -1,9 +1,9 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [3.0.0] - 2026-11-27
 ### Added
 - 3.0 stage 6 (layout + installer): install-3.0.ps1 deploys into
   InstallRoot\Versions\<ver>\ with a SHA256 manifest, stages as <ver>.incomplete and
@@ -78,6 +78,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
   `Read-MgState` defaults, a real event line, and an unknown event name (must be
   rejected). These are the file/event levels the 3.0 parity runner compares, so
   "same output" now means "same meaning" instead of "same text".
+
+## [3.0.0] - 2026-11-27
+### Added (3.0)
+- C# core, C# watcher, Named Pipe IPC, contracts, versioned install root, downgrade
+  protection, migration on a real 2.6.1 backup - see docs/PLAN-3.0.md and docs/adr/.
 
 ## [2.6.1] - 2026-11-27
 ### Fixed

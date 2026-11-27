@@ -137,6 +137,16 @@ if (-not $SkipCompile) {
     if (Test-Path -LiteralPath $hostExe) { $null = (Get-Item $hostExe) }
 }
 
+# --- DataRoot tooling layer: меню, диагностика и .bat живут в корне DataRoot (как в 2.5/2.6),
+# --- поэтому обновляем и их: иначе пользователь запускает старые скрипты при новом watcher'е.
+foreach ($file in $deploy) {
+    $src = Join-Path $staging $file
+    if (-not (Test-Path -LiteralPath $src)) { continue }
+    if ($file -like '*.cs' -or $file -eq 'version.json') { continue }
+    Copy-Item -LiteralPath $src -Destination (Join-Path $DataRoot $file) -Force
+}
+$null = $actions.Add('DataRoot tooling: обновлены скрипты меню/диагностики (пользовательские файлы не тронуты)')
+
 # ---------------- manifest + verify ----------------
 Write-Step 'манифест и проверка'
 $manifest = [ordered]@{}
@@ -191,20 +201,30 @@ if (-not $NoStart) {
     $hostExe = Join-Path $versionDir 'MG-Helper-Host.exe'
     $engine = if (Test-Path -LiteralPath $watcherExe) { $watcherExe } else { $hostExe }
     if (-not (Test-Path -LiteralPath $engine)) { Write-Warn2 "нет исполняемого файла watcher'а в $versionDir - установка не запущена"; exit 1 }
+    # запуск: сначала штатная задача, затем schtasks-фолбэк (как в 2.6.1), затем прямой запуск.
+    # На части машин Register-ScheduledTask требует прав администратора - это не повод
+    # остаться без защиты.
+    $taskOk = $false
     try {
-        $action = New-ScheduledTaskAction -Execute $engine -Argument ''
-        $trigger1 = New-ScheduledTaskTrigger -AtLogOn
-        $trigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10)
-        $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($trigger1, $trigger2) -Settings $settings -Principal $principal -Force | Out-Null
-        Start-ScheduledTask -TaskName $taskName
-        Write-Ok "watcher запущен: $engine (задача $taskName)"
+        $action = New-ScheduledTaskAction -Execute $engine
+        $trig1 = New-ScheduledTaskTrigger -AtLogOn
+        $trig2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10)
+        $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        $prn = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($trig1, $trig2) -Settings $set -Principal $prn -Force -ErrorAction Stop | Out-Null
+        $taskOk = $true
     } catch {
-        Write-Warn2 "не удалось зарегистрировать задачу: $($_.Exception.Message)"
+        & schtasks /Create /F /SC MINUTE /MO 10 /TN $taskName /TR "`"$engine`"" 2>&1 | Out-Null
+        $taskOk = ($LASTEXITCODE -eq 0)
+    }
+    if ($taskOk) {
+        try { Start-ScheduledTask -TaskName $taskName } catch { & schtasks /Run /TN $taskName 2>&1 | Out-Null }
+        Write-Ok "watcher запущен: $engine (задача $taskName)"
+    } else {
+        Start-Process -FilePath $engine -WindowStyle Hidden
+        Write-Warn2 "задачу зарегистрировать не удалось - watcher запущен напрямую (после перезагрузки запусти: $engine)"
     }
 }
-
 Write-Ok "MG Helper $packageVersion установлен"
 Write-Host "    InstallRoot: $InstallRoot"
 Write-Host "    DataRoot:    $DataRoot"
