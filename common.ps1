@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '2.6.1'   # держать в синке с version.json
+$script:Version = '3.0.0'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 # MG3-021 (3.0, план docs/PLAN-3.0.md этап 1): тестовый хук. По умолчанию - живая
 # папка; MG_HELPER_DIR направляет ВСЁ состояние в песочницу, чтобы настоящий цикл

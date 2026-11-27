@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 6 (layout + installer): install-3.0.ps1 deploys into
+  InstallRoot\Versions\<ver>\ with a SHA256 manifest, stages as <ver>.incomplete and
+  promotes by rename, switches current.json atomically, writes migration-report.json and
+  keeps DataRoot untouched. -Rollback switches the pointer (no reinstall); an older
+  package is refused unless -Force. The package version is now 3.0.0.
+  tools/integration-migration.ps1 migrates the real 2.6.1 backup from backups\2.6.1 into a
+  sandbox and checks 16 properties (manifest hashes, untouched user files, idempotency,
+  rollback, downgrade guard); it is part of the suite: 109 checks, ALL GREEN, ~56 s.
 - 3.0 stage 5b (C# watcher): MGHelper.Watcher.exe runs the same loop as the PS
   watcher - process detection, apply on launch, in-session guard rollback, adopt/restore
   on exit, SAFE MODE on a golden-key mismatch, health every 5 s, events.jsonl, log,

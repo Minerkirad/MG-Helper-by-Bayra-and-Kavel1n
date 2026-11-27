@@ -288,7 +288,7 @@ DoD: чек-лист §9 полностью; старый PS-watcher удалё�
 | 3. PS core модуль | **закрыт**: `MgHelper.Core.ps1` (8 чистых решений), dot-source из common.ps1, деплой, parity через модуль |
 | 4. C# ядро | **закрыт**: `CoreDecisions.cs` → `MgCore.exe --decide`, parity `-Both` (21/21 у обеих реализаций + cross-check) |
 | 5. C# watcher + IPC | **закрыт**: 5a — Named Pipe (status/stop/reload-config/apply-golden, ACL, файловый резерв); 5b — `MGHelper.Watcher.exe` проходит ту же сессию, что PS (21 проверка в песочнице), решения из C#-ядра |
-| 6. Раскладка + установщик | следующий |
-| 7. UI + релиз | не начат |
+| 6. Раскладка + установщик | **закрыт в песочнице**: `install-3.0.ps1` (Versions/current.json, манифест SHA256, .incomplete, migration-report, -Rollback), миграция копии 2.6.1 (16 проверок) |
+| 7. UI + релиз | следующий: решение по UI (ADR-004), деплой на живую, тег v3.0.0 и релиз |
 
 Обновлять таблицу в том же коммите, в котором закрывается этап.

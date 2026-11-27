@@ -781,6 +781,18 @@ if (-not (Test-Path -LiteralPath $watcherCs)) { Bad 'watcher: MGHelper.Watcher.c
 else {
     $wCs = Get-Content $watcherCs -Raw
     if ($wCs -match 'MgDecisions\.Run') { Good 'watcher: the C# watcher takes every decision from the C# core' } else { Bad 'watcher: MGHelper.Watcher.cs does not use MgDecisions' }
+$intMigrOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-migration.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'migration: the 2.6.1 backup migrates to the 3.0 layout (versions, current.json, manifest, rollback)' }
+else { Bad ("migration: runner failed - " + (($intMigrOut | Select-Object -Last 3) -join ' | ')) }
+$inst3 = Join-Path $repo 'install-3.0.ps1'
+if (-not (Test-Path -LiteralPath $inst3)) { Bad 'installer 3.0: install-3.0.ps1 missing' }
+else {
+    $i3 = Get-Content $inst3 -Raw
+    foreach ($marker in '.incomplete', 'current.json', 'manifest.json', 'migration-report.json', 'Test-InstallDowngrade', '-Rollback') {
+        if ($i3 -notmatch [regex]::Escape($marker)) { Bad "installer 3.0: missing '$marker'" }
+    }
+    Good 'installer 3.0: staged deploy, manifest, current.json, migration report and rollback are present'
+}
     if ($instTxt5 -match 'MGHelper\.Watcher\.cs') { Good 'watcher: MGHelper.Watcher.cs is in the installer deploy list' } else { Bad 'watcher: installer does not ship MGHelper.Watcher.cs' }
 }
 
