@@ -44,7 +44,7 @@ $config = [ordered]@{
     miamiGraphicsDir = (Join-Path $sandbox 'mg')
     majesticJson = $majesticJson
     lastFullDiscovery = ''
-    gameProcesses = @('GTA5')
+    gameProcesses = @('MGTESTGAME')
     launcherProcesses = @('MajesticTestLauncher')
     mgProcesses = @('MiamiTest')
     autoCleanDlccache = $false; autoUpdate = $false
@@ -63,6 +63,10 @@ try {
     $ready = Wait-Until { ((Get-Content (Join-Path $sandbox 'watcher.health.json') -Raw -ErrorAction SilentlyContinue) -match '"status":"running"') } 90
     Check $ready 'watcher.start: health file appears in the sandbox'
     if (-not $ready) { throw 'watcher did not start' }
+    # защита от утечки: watcher не должен уйти на живые пути пользователя
+    $sandboxCfg = Get-Content (Join-Path $sandbox 'config.json') -Raw | ConvertFrom-Json
+    Check ($sandboxCfg.settingsXml -like "$sandbox*") "isolation: watcher still writes inside the sandbox (settingsXml=$($sandboxCfg.settingsXml))"
+    if ($sandboxCfg.settingsXml -notlike "$sandbox*") { throw 'sandbox escaped: refusing to continue' }
     $health = Get-Content (Join-Path $sandbox 'watcher.health.json') -Raw | ConvertFrom-Json
     Check ($health.status -eq 'running') "health.status = running (got '$($health.status)')"
     Check ($health.phase -eq 'Idle') "health.phase = Idle before any session (got '$($health.phase)')"
@@ -75,7 +79,7 @@ try {
     $logText = if (Test-Path (Join-Path $sandbox 'watcher.log')) { (Get-Content (Join-Path $sandbox 'watcher.log') -Tail 6) -join ' | ' } else { '<no log>' }
     if (-not $Quiet -and $script:fails.Count -gt 0) { Write-Host ("    watcher.log: " + $logText) -ForegroundColor DarkGray }
     # --- сессия с фейковым процессом игры (пинг, переименованный в GTA5.exe) ---
-    $fakeExe = Join-Path $sandbox 'GTA5.exe'
+    $fakeExe = Join-Path $sandbox 'MGTESTGAME.exe'
     Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\PING.EXE') -Destination $fakeExe -Force
     $fakeGame = Start-Process -FilePath $fakeExe -ArgumentList '-n', '120', '127.0.0.1' -PassThru -WindowStyle Hidden
     $inGame = Wait-Until { ((Get-Content (Join-Path $sandbox 'watcher.health.json') -Raw -ErrorAction SilentlyContinue) -match '"phase":"InGame"') } 90

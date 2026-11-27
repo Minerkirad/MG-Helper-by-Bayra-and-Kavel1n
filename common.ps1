@@ -461,6 +461,11 @@ function Get-CachedWalk {
 function Resolve-MgPaths {
     param([switch]$NoSave, [switch]$ForceFull)
     $cfg = Get-MgConfig
+    # MG3-021: в тестовом режиме (MG_HELPER_DIR) config.json - единственный источник
+    # правды. Полная переразведка иначе уводит watcher на ЖИВЫЕ пути пользователя:
+    # интеграционный тест однажды так перезаписал настоящий settings.xml (поймано
+    # сразу, но такой тест не должен иметь возможности это сделать в принципе).
+    if ($env:MG_HELPER_DIR) { return $cfg }
     $changed = $false
 
     # cached path must EXIST (existence-only: game may hold the file open);
