@@ -19,15 +19,39 @@ function Check([bool]$ok, [string]$what) {
 }
 function HashOf([string]$Path) { if (Test-Path -LiteralPath $Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash } return $null }
 
+# Фикстура: реальный бэкап 2.6.1, если он есть рядом (машина разработчика), иначе -
+# синтетическая «живая папка 2.6.1», собранная из этого же пакета. CI обязан быть
+# самодостаточным: репозиторий не хранит гигабайтные бэкапы.
 $backup = Get-ChildItem (Join-Path $repo '..\backups\2.6.1') -Filter 'live-install-*.zip' -File -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-if (-not $backup) { Write-Host 'FAIL: backups\2.6.1\live-install-*.zip not found' -ForegroundColor Red; exit 1 }
-
 $sandbox = Join-Path $env:TEMP ('mg_migr_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $data = Join-Path $sandbox 'MG_Helper'
 $app = Join-Path $data 'App'
 New-Item -ItemType Directory -Force -Path $data | Out-Null
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::ExtractToDirectory($backup.FullName, $data)
+if ($backup) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($backup.FullName, $data)
+    if (-not $Quiet) { Write-Host "  fixture: real 2.6.1 backup ($($backup.Name))" -ForegroundColor DarkGray }
+} else {
+    # синтетическая живая папка 2.6.1: скрипты из пакета + версия 2.6.1 + пользовательские файлы
+    foreach ($name in 'common.ps1','gta-settings-watcher.ps1','MG-Helper.ps1','diagnose.ps1') {
+        Copy-Item -LiteralPath (Join-Path $repo $name) -Destination (Join-Path $data $name) -Force -ErrorAction SilentlyContinue
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'version.json'), "{`r`n    `"version`": `"2.6.1`"`r`n}", (New-Object System.Text.UTF8Encoding($false)))
+    $fixtureXml = '<?xml version="1.0"?><Settings><graphics><TextureQuality value="2" /></graphics><pad>' + ('x' * 200) + '</pad></Settings>'
+    [IO.File]::WriteAllText((Join-Path $data 'settings.golden.xml'), $fixtureXml, [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText((Join-Path $sandbox 'settings.xml'), $fixtureXml, [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText((Join-Path $data 'golden_key.json'), '{"variant":"GTA V","gpu":"Fixture GPU"}', [Text.UTF8Encoding]::new($false))
+    $fixtureCfg = [ordered]@{
+        version = 1; cfgVersion = 3
+        settingsXml = (Join-Path $sandbox 'settings.xml')
+        miamiGraphicsDir = ''; majesticJson = ''; lastFullDiscovery = ''
+        gameProcesses = @('GTA5','GTA5_Enhanced'); launcherProcesses = @('Majestic'); mgProcesses = @('Miami')
+        autoCleanDlccache = $false; autoUpdate = $false
+        onExit = 'restore'; allowAdopt = $false; sessionGuard = $true; guardWindowSec = 0; docsRoot = ''
+    }
+    [IO.File]::WriteAllText((Join-Path $data 'config.json'), ($fixtureCfg | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+    if (-not $Quiet) { Write-Host '  fixture: synthetic 2.6.1 live folder (no local backup)' -ForegroundColor DarkGray }
+}
 
 $oldData = $env:MG_HELPER_DIR
 $oldApp = $env:MG_INSTALL_ROOT
