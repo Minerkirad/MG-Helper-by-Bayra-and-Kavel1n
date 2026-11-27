@@ -5,6 +5,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 1 (testability): `MG_HELPER_DIR` redirects every piece of watcher state
+  to a sandbox (default path unchanged, and in that mode the single-instance mutex
+  and the stop event use a separate test namespace), and `tools\integration.ps1`
+  runs the REAL watcher loop end to end: start/ready, a session with a game
+  process (golden applied, pre-apply backup made), exit back to Idle with
+  `settings.xml` byte-identical, then `stop.request` -> `watcher.stop`,
+  `status=stopping` and `watcher.ready` removed. 17 assertions, wired into
+  `tools\check.ps1` §11y; the suite now takes ~30 s of which ~20 s is this run.
+- Detailed migration plan: `docs/PLAN-3.0.md` - eight stages with tasks (MG3-021…
+  044), file-level scope, DoD per stage, dependency graph, quality gates, risks,
+  rollback and the checklist for retiring the PS watcher. Stage 0 (contracts,
+  parity, release, backups) and stage 1 are closed.
 - Parity runner (3.0 stage B): `tools\parity\expected.json` holds 21 scenarios as
   data (`guard`, `adopt`, `golden-source`, `apply`, `compare`, `policy`) and
   `tools\parity.ps1` executes them against the selected implementation - today the

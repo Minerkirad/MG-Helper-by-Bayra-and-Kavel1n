@@ -704,6 +704,14 @@ $parityFailed = @($parityResults | Where-Object { -not $_.ok })
 if ($parityFailed.Count -eq 0) { Good "parity: all $($parityResults.Count) scenarios match expected.json (ps implementation)" }
 else { Bad ("parity: " + $parityFailed.Count + " diverged - " + (($parityFailed | ForEach-Object { "$($_.id): $($_.error)" }) -join ' | ')) }
 
+# 11y. 3.0/этап 1: интеграционный прогон НАСТОЯЩЕГО watcher'а в песочнице
+# (MG_HELPER_DIR). Проверяет старт, сессию с процессом игры, выход и файловый стоп -
+# то, чего не может ни один тест отдельных функций.
+$ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$intOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'integration: the real watcher loop starts, plays a session, exits on stop.request' }
+else { Bad ("integration: runner failed - " + (($intOut | Select-Object -Last 3) -join ' | ')) }
+
 # 11u. Fault-injection (этап A ревью 3.0): сценарии, которые раньше не покрывались
 # a) битый/чужой state.json при живой игре -> defaults, watcher не падает,
 #    а состояние не считается доверенным (дальше он уходит в UnknownSession)

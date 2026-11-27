@@ -8,7 +8,10 @@
 
 $script:Version = '2.6.1'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
-$script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
+# MG3-021 (3.0, план docs/PLAN-3.0.md этап 1): тестовый хук. По умолчанию - живая
+# папка; MG_HELPER_DIR направляет ВСЁ состояние в песочницу, чтобы настоящий цикл
+# watcher'а можно было прогнать тестом (tools\integration.ps1), не трогая установку.
+$script:HelperDir = if ($env:MG_HELPER_DIR) { [IO.Path]::GetFullPath($env:MG_HELPER_DIR) } else { Join-Path $env:LOCALAPPDATA 'MG_Helper' }
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
 $script:VersionFile = Join-Path $PSScriptRoot 'version.json'
 

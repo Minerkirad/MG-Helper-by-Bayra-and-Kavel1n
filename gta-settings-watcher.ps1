@@ -8,12 +8,14 @@ param(
 )
 $ErrorActionPreference = 'SilentlyContinue'
 
-$HelperDir  = Join-Path $env:LOCALAPPDATA 'MG_Helper'
+$HelperDir  = if ($env:MG_HELPER_DIR) { [IO.Path]::GetFullPath($env:MG_HELPER_DIR) } else { Join-Path $env:LOCALAPPDATA 'MG_Helper' }
 $Golden     = Join-Path $HelperDir 'settings.golden.xml'
 $LogFile    = Join-Path $HelperDir 'watcher.log'
 $StateFile  = Join-Path $HelperDir 'state.json'
-$StopEvent  = 'Local\MG_Helper_Stop'
-$MutexName  = 'Local\MG_Helper_Watcher'
+# MG3-021: в тестовом режиме (MG_HELPER_DIR) mutex и событие живут в отдельном
+# пространстве имён, иначе песочница не стартует рядом с живым watcher'ом
+$StopEvent  = if ($env:MG_HELPER_DIR) { 'Local\MG_Helper_Stop_test' } else { 'Local\MG_Helper_Stop' }
+$MutexName  = if ($env:MG_HELPER_DIR) { 'Local\MG_Helper_Watcher_test' } else { 'Local\MG_Helper_Watcher' }
 $TaskName   = 'MG_Helper_Watcher'
 
 . (Join-Path $PSScriptRoot 'common.ps1')
