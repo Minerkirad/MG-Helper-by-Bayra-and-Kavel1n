@@ -56,6 +56,8 @@ $config = [ordered]@{
 $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $oldDir = $env:MG_HELPER_DIR
 $env:MG_HELPER_DIR = $sandbox
+# клиент канала живёт в common.ps1 (Get-MgPipeName смотрит на MG_HELPER_DIR)
+. (Join-Path $repo 'common.ps1')
 $proc = $null
 $fakeGame = $null
 try {
@@ -97,10 +99,30 @@ try {
     Check ([bool]($events | Where-Object { $_ -match '"event":"session.end"' })) 'events: session.end emitted'
     Check (([IO.File]::ReadAllText($settings)) -eq $xml) 'settings.xml is byte-identical after the session (golden untouched)'
 
-    # --- кооперативная остановка через файловый флаг (канал меню [2]/[11]) ---
-    [IO.File]::WriteAllText((Join-Path $sandbox 'stop.request'), "requested=$(Get-Date -Format 'o')", [Text.UTF8Encoding]::new($false))
+    # --- 3.0/этап 5a: Named Pipe (ADR-003), плюс файловый резервный канал ---
+    $statusResp = Invoke-MgPipeCommand -Command 'status'
+    Check ([bool]($statusResp -and $statusResp.ok)) 'pipe: {"cmd":"status"} answers ok'
+    if ($statusResp -and $statusResp.ok) {
+        Check ([string]$statusResp.status.status -eq 'running') "pipe: status reports the live health ('$($statusResp.status.status)')"
+    }
+    $null = Invoke-MgPipeCommand -Command 'reload-config'
+    $reloadOk = Wait-Until { ((Get-Content (Join-Path $sandbox 'watcher.log') -Raw -ErrorAction SilentlyContinue) -match 'config reloaded \(pipe request\)') } 20
+    Check $reloadOk 'pipe: reload-config is executed by the loop'
+    $settingsBefore = (Get-FileHash $settings -Algorithm SHA256).Hash
+    $null = Invoke-MgPipeCommand -Command 'apply-golden'
+    $applyOk = Wait-Until { ((Get-Content (Join-Path $sandbox 'watcher.log') -Raw -ErrorAction SilentlyContinue) -match 'golden applied \(pipe request\)') } 20
+    Check $applyOk 'pipe: apply-golden is executed by the loop'
+    Check ((Get-FileHash $settings -Algorithm SHA256).Hash -eq $settingsBefore) 'pipe: apply-golden is idempotent for an already-applied golden'
+    # файловый канал: тот же запрос, но файлом (резервный путь на один релиз)
+    $applyCountBefore = ([regex]::Matches((Get-Content (Join-Path $sandbox 'watcher.log') -Raw), 'golden applied \(pipe request\)')).Count
+    [IO.File]::WriteAllText((Join-Path $sandbox 'apply.request'), 'manual', [Text.UTF8Encoding]::new($false))
+    $fileOk = Wait-Until { ([regex]::Matches((Get-Content (Join-Path $sandbox 'watcher.log') -Raw), 'golden applied \(pipe request\)')).Count -gt $applyCountBefore } 20
+    Check $fileOk 'pipe: the same command as a plain file still works (fallback channel)'
+
+    # --- кооперативная остановка через канал (меню [2]/[11]) ---
+    $null = Invoke-MgPipeCommand -Command 'stop'
     $exited = Wait-Until { $proc.HasExited } 30
-    Check $exited 'stop: watcher exits after stop.request'
+    Check $exited 'stop: watcher exits after {"cmd":"stop"} on the pipe'
     $events = @(Get-Content (Join-Path $sandbox 'events.jsonl') -ErrorAction SilentlyContinue)
     Check ([bool]($events | Where-Object { $_ -match '"event":"watcher.stop"' })) 'events: watcher.stop emitted'
     $h2 = Get-Content (Join-Path $sandbox 'watcher.health.json') -Raw | ConvertFrom-Json

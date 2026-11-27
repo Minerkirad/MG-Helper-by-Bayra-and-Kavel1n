@@ -376,6 +376,24 @@ $script:lastTrayStart = [datetime]::MinValue   # tray auto-restart rate limiter
 $ReadyFile = Join-Path $HelperDir 'watcher.ready'
 [IO.File]::WriteAllText($ReadyFile, "ready=$(Get-Date -Format 'o') version=$(Get-PkgVersion)" + [char]13 + [char]10, [Text.UTF8Encoding]::new($false))
 Log "[i] watcher READY (mutex held, config loaded, state initialised)"
+# 3.0 (этап 5a): Named Pipe - команды трея/меню без опроса файлов (docs/adr/ADR-003).
+# Сервер ничего не решает сам: он читает health и пишет файлы-запросы, которые
+# забирает этот же цикл. Поэтому файловый путь остаётся резервным каналом.
+$script:pipeName = if ($env:MG_HELPER_DIR) { 'MG_Helper_test' } else { 'MG_Helper' }
+$script:pipeReady = $false
+try {
+    # исходник ищем рядом со скриптами (пакет), затем в папке данных
+    $pipeSrc = Join-Path $PSScriptRoot 'HelperPipe.cs'
+    if (-not (Test-Path -LiteralPath $pipeSrc)) { $pipeSrc = Join-Path $HelperDir 'HelperPipe.cs' }
+    if (Test-Path -LiteralPath $pipeSrc) {
+        if (-not ('MgPipe' -as [type])) {
+            Add-Type -TypeDefinition ([IO.File]::ReadAllText($pipeSrc)) -ReferencedAssemblies @('System.Core') -ErrorAction Stop
+        }
+        $script:pipeReady = [MgPipe]::Start($script:pipeName, $HelperDir)
+        if ($script:pipeReady) { Log "[i] command pipe ready (\\.\pipe\$($script:pipeName))" }
+        else { Log '[MG-E-0106] command pipe did not start - file fallback only' }
+    }
+} catch { Log "[MG-E-0106] command pipe unavailable: $_" }
 Ev 'watcher.ready' "version=$(Get-PkgVersion)"
 Update-Health -Status 'running'
 $sessionStart = $null
@@ -432,6 +450,37 @@ while ($true) {
 
     # cooperative stop
     try { if ($stopEvent -and $stopEvent.WaitOne(0)) { Log 'stop requested (event)'; break } } catch {}
+    # 3.0 (этап 5a): запросы команды (reload-config / apply-golden) из Named Pipe
+    try {
+        if (Test-Path -LiteralPath (Join-Path $HelperDir 'reload.request')) {
+            Remove-Item -LiteralPath (Join-Path $HelperDir 'reload.request') -Force -ErrorAction SilentlyContinue
+            $cfgReload = Get-MgConfig
+            if ($cfgReload.settingsXml) {
+                $cfg = $cfgReload
+                $allowAdopt = if ($null -ne $cfg.allowAdopt) { [bool]$cfg.allowAdopt } else { $false }
+                $legacyOnExit = if ($cfg.onExit) { [string]$cfg.onExit } else { '' }
+                $sessionGuard = if ($null -ne $cfg.sessionGuard) { [bool]$cfg.sessionGuard } else { $true }
+                $GuardWindowSec = if ($null -ne $cfg.guardWindowSec) { [int]$cfg.guardWindowSec } else { 0 }
+            }
+            Log "[i] config reloaded (pipe request)"
+            Ev 'config.reloaded' 'pipe'
+        }
+        if (Test-Path -LiteralPath (Join-Path $HelperDir 'apply.request')) {
+            Remove-Item -LiteralPath (Join-Path $HelperDir 'apply.request') -Force -ErrorAction SilentlyContinue
+            if (Apply-Golden -Cfg $cfg) {
+                $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                $appliedThisSession = $true
+                $state.applied = $true
+                $state.lastApplyUtc = $lastApplyUtc.ToString('o')
+                Save-State $state
+                Log "golden applied (pipe request)"
+                Ev 'golden.applied' 'manual'
+            } else {
+                Log "[MG-E-0104] gold apply failed (pipe request)"
+                Ev 'apply.failed' 'manual'
+            }
+        }
+    } catch { Log "[!] pipe request handling: $_" }
     # 2.6.1: файловый флаг - резервный канал остановки (см. MG-E-0105)
     try {
         if (Test-Path -LiteralPath (Join-Path $HelperDir 'stop.request')) {
@@ -827,6 +876,7 @@ while ($true) {
 # 2.6.1: нормальный выход - сначала status=stopping (потребители увидят это
 # сразу), затем снимается watcher.ready. Файл health остаётся с просроченным
 # heartbeat: трей покажет "Watcher не работает", а не "неизвестно".
+try { if ('MgPipe' -as [type]) { [MgPipe]::Stop() } } catch {}
 Update-Health -Status 'stopping'
 Ev 'watcher.stop' "version=$(Get-PkgVersion)"
 Log "watcher stopped"

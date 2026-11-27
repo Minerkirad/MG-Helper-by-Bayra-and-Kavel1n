@@ -285,7 +285,7 @@ DoD: чек-лист §9 полностью; старый PS-watcher удалё�
 | 2. Контракты+/ADR | **закрыт**: 7 схем (+config/golden_key/profiles/journal), 5 ADR, событийный уровень parity (`expected-events.json`) |
 | 3. PS core модуль | **закрыт**: `MgHelper.Core.ps1` (8 чистых решений), dot-source из common.ps1, деплой, parity через модуль |
 | 4. C# ядро | **закрыт**: `CoreDecisions.cs` → `MgCore.exe --decide`, parity `-Both` (21/21 у обеих реализаций + cross-check) |
-| 5. C# watcher + IPC | следующий |
+| 5. C# watcher + IPC | **5a закрыт**: Named Pipe `MG_Helper` (status/stop/reload-config/apply-golden), ACL с запретом Network, файловый резерв, меню через канал; остаётся 5b — C#-watcher |
 | 6–7 | не начаты |
 
 Обновлять таблицу в том же коммите, в котором закрывается этап.

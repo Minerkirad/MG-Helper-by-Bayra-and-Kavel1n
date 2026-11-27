@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 5a (Named Pipe IPC, ADR-003): HelperPipe.cs serves \\.\pipe\MG_Helper
+  with an explicit security descriptor (current user only, NetworkSid denied) and four
+  commands - status (returns watcher.health.json), stop, reload-config, apply-golden.
+  The server is stateless: commands land in the same request files the file fallback
+  uses, so an older watcher still works. common.ps1 gained Invoke-MgPipeCommand and
+  Get-MgLiveStatus (pipe first, health fallback), menu [2]/[11] restart goes through
+  the pipe first. Integration test drives status/reload/apply/stop over the pipe and
+  the file fallback (27 assertions); suite: 100 checks, ALL GREEN in ~38 s.
 - 3.0 stage 4 (C# core): CoreDecisions.cs implements the same decisions as the PS
   core (adopt matrix, guard, golden selection, apply, XML compare, policy migration)
   and answers MgCore.exe --decide <request.json> <response.json>. tools\parity.ps1

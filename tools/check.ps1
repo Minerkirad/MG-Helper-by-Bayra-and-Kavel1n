@@ -750,6 +750,14 @@ else {
     if ($coreCs -match 'Microsoft\.Win32|RegistryKey|System\.Net\.|HttpClient|new Socket|Process\.Start') { Bad 'core: C# decisions must stay pure (registry/process/network call found)' }
     else { Good 'core: C# decisions stay pure (no registry/process/network)' }
     if ($instTxt5 -match 'CoreDecisions\.cs') { Good 'core: CoreDecisions.cs is in the installer deploy list' } else { Bad 'core: installer does not ship CoreDecisions.cs' }
+    $pipeCs = Join-Path $repo 'HelperPipe.cs'
+    if (-not (Test-Path -LiteralPath $pipeCs)) { Bad 'pipe: HelperPipe.cs missing' }
+    else {
+        $pipeTxt = Get-Content $pipeCs -Raw
+        if ($pipeTxt -match 'NetworkSid') { Good 'pipe: remote access is denied by the ACL (NetworkSid deny rule)' } else { Bad 'pipe: HelperPipe.cs does not deny remote clients' }
+        if ($pipeTxt -match 'NamedPipeServerStream' -and $pipeTxt -match 'PipeSecurity') { Good 'pipe: the pipe is created with an explicit security descriptor' } else { Bad 'pipe: pipe security is not explicit' }
+        if ($instTxt5 -match 'HelperPipe\.cs') { Good 'pipe: HelperPipe.cs is in the installer deploy list' } else { Bad 'pipe: installer does not ship HelperPipe.cs' }
+    }
 }
 
 # 11y. 3.0/этап 1: интеграционный прогон НАСТОЯЩЕГО watcher'а в песочнице

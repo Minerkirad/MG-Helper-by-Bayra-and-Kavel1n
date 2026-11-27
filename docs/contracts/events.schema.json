@@ -10,7 +10,7 @@
     "phase": { "type": "string", "description": "State phase at the moment of the event." },
     "event": {
       "enum": [
-        "watcher.start", "watcher.ready", "watcher.stop",
+        "watcher.start", "watcher.ready", "watcher.stop", "config.reloaded",
         "golden.applied", "golden.mismatch", "adopt.accepted", "apply.failed",
         "session.start", "session.end", "session.unknown",
         "guard.rollback", "guard.window_expired",

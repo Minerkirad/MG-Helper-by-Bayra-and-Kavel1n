@@ -67,10 +67,17 @@ function Restart-Watcher {
         }
 
         $signalled = $false
-        try {
-            $stopEvent = [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop')
-            try { $signalled = $stopEvent.Set() } finally { $stopEvent.Dispose() }
-        } catch { $signalled = $false }
+        # 3.0 (этап 5a): сначала канал (ADR-003), затем именованное событие, затем файл
+        if (Get-Command Invoke-MgPipeCommand -ErrorAction SilentlyContinue) {
+            $piped = Invoke-MgPipeCommand -Command 'stop'
+            if ($piped -and $piped.ok) { $signalled = $true }
+        }
+        if (-not $signalled) {
+            try {
+                $stopEvent = [System.Threading.EventWaitHandle]::OpenExisting('Local\MG_Helper_Stop')
+                try { $signalled = $stopEvent.Set() } finally { $stopEvent.Dispose() }
+            } catch { $signalled = $false }
+        }
         # 2.6.1: резервный канал - файл stop.request. Именованное событие может быть
         # недоступно (другая сессия, политика объектов) - на живой машине так и было:
         # событие не открывалось, и перезапуск после [11] не срабатывал.

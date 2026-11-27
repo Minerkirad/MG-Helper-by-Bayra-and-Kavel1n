@@ -642,6 +642,41 @@ function Get-WatcherHealth {
     return @{ status = 'Stopped'; data = $d; ageSec = $age }
 }
 
+# ------------------------------------------------------------
+# 3.0 (этап 5a): клиент Named Pipe (docs/adr/ADR-003). Команды идут в watcher,
+# ответ - JSON. Если канал недоступен (старая установка, другой пользователь),
+# возвращается $null, и вызывающий использует файловый путь.
+# ------------------------------------------------------------
+function Get-MgPipeName {
+    if ($env:MG_HELPER_DIR) { return 'MG_Helper_test' }
+    return 'MG_Helper'
+}
+
+function Invoke-MgPipeCommand {
+    param([string]$Command = 'status', [int]$TimeoutMs = 1500, [string]$PipeName)
+    if (-not $PipeName) { $PipeName = Get-MgPipeName }
+    $client = $null
+    try {
+        $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
+        $client.Connect($TimeoutMs)
+        $writer = New-Object System.IO.StreamWriter($client)
+        $writer.AutoFlush = $true
+        $writer.WriteLine((@{ cmd = $Command } | ConvertTo-Json -Compress))
+        $reader = New-Object System.IO.StreamReader($client)
+        $line = $reader.ReadLine()
+        if (-not $line) { return $null }
+        return ($line | ConvertFrom-Json)
+    } catch { return $null }
+    finally { if ($client) { try { $client.Dispose() } catch {} } }
+}
+
+function Get-MgLiveStatus {
+    # статус по каналу; при отказе - по health-файлу. source показывает, чем ответили.
+    $piped = Invoke-MgPipeCommand -Command 'status'
+    if ($piped -and $piped.ok -and $piped.status) { return @{ source = 'pipe'; data = $piped.status; health = [string]$piped.status.status; ageSec = $null } }
+    $health = Get-WatcherHealth
+    return @{ source = 'health'; data = $health.data; health = $health.status; ageSec = $health.ageSec }
+}
 function Get-XmlSignature {
     # structural signature of an XML document: every element becomes
     # "path [attr1=v1;attr2=v2]" with attributes SORTED - whitespace and
