@@ -4,6 +4,10 @@ All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [3.0.0] - 2026-11-27
+### Notes
+- The legacy PS watcher stays in the 3.0.0 package (ADR-005): the C# watcher is the
+  default, the PS one is started by explicit request and both share the single-instance
+  mutex. Removing it is the first 3.1 task, gated by the checklist in docs/PLAN-3.0.md §9.
 ### Added
 - 3.0 stage 6 (layout + installer): install-3.0.ps1 deploys into
   InstallRoot\Versions\<ver>\ with a SHA256 manifest, stages as <ver>.incomplete and
@@ -80,6 +84,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
   "same output" now means "same meaning" instead of "same text".
 
 ## [3.0.0] - 2026-11-27
+### Notes
+- The legacy PS watcher stays in the 3.0.0 package (ADR-005): the C# watcher is the
+  default, the PS one is started by explicit request and both share the single-instance
+  mutex. Removing it is the first 3.1 task, gated by the checklist in docs/PLAN-3.0.md §9.
 ### Added (3.0)
 - C# core, C# watcher, Named Pipe IPC, contracts, versioned install root, downgrade
   protection, migration on a real 2.6.1 backup - see docs/PLAN-3.0.md and docs/adr/.
