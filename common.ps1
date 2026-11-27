@@ -6,7 +6,7 @@
 #  Everything here is PS 5.1-safe. The FILE must be UTF-8 with BOM.
 # ============================================================
 
-$script:Version = '2.6.0'   # держать в синке с version.json
+$script:Version = '2.6.1'   # держать в синке с version.json
 $script:RepoSlug = 'Minerkirad/MG-Helper-by-Bayra-and-Kavel1n'
 $script:HelperDir = Join-Path $env:LOCALAPPDATA 'MG_Helper'
 $script:ConfigFile = Join-Path $script:HelperDir 'config.json'
@@ -33,6 +33,11 @@ function Get-PkgVersion {
 function Get-MgConfig {
     $cfg = [ordered]@{
         version           = 1
+        # политика 2.6.1: политика версионируется отдельно, чтобы миграция
+        # (onExit=adopt и guardWindowSec=120 от старых установок) выполнилась один раз.
+        # 3 - после починки гейта: первый билд 2.6.1 писал cfgVersion=2, не применив
+        # миграцию, поэтому такие конфиги лечатся отдельной веткой.
+        cfgVersion        = 3
         settingsXml       = ''
         miamiGraphicsDir  = ''
         majesticJson      = ''
@@ -42,9 +47,15 @@ function Get-MgConfig {
         mgProcesses       = @('Miami', 'MiamiGraphics')
         autoCleanDlccache = $false
         autoUpdate        = $false
-        onExit            = 'adopt'
+        # deprecated: больше НЕ включает adopt (см. allowAdopt). Оставлен для совместимости.
+        onExit            = 'restore'
+        # opt-in: правки на диске при выходе становятся новым эталоном.
+        # По умолчанию выключено - эталон при выходе восстанавливается, как в 1.x.
+        allowAdopt        = $false
         sessionGuard      = $true
-        guardWindowSec    = 120
+        # 0 = охранять ВСЮ сессию (чужую перезапись откатывать в любой момент);
+        # >0 = только первые N секунд (старое поведение)
+        guardWindowSec    = 0
         docsRoot          = (Get-DocsPin)
     }
     if (Test-Path -LiteralPath $script:ConfigFile) {
@@ -53,6 +64,9 @@ function Get-MgConfig {
             foreach ($p in @($cfg.Keys)) {
                 if ($null -ne $loaded.$p) { $cfg[$p] = $loaded.$p }
             }
+            # старый конфиг без cfgVersion: дефолт (3) замаскировал бы отсутствие
+            # ключа, и миграция политики не выполнилась бы никогда
+            if ($null -eq $loaded.cfgVersion) { $cfg.cfgVersion = 0 }
         } catch {
             # config exists but is broken - keep a copy for the user, use defaults
             try {
@@ -94,6 +108,30 @@ function Save-MgConfig {
             Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+function Update-MgConfigPolicy {
+    # 2.6.1: миграция политики. В 2.5/2.6 config.json целиком писал установщик,
+    # поэтому onExit='adopt' и guardWindowSec=120 - ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ, а не
+    # выбор пользователя. Политика: эталон при выходе восстанавливается
+    # (allowAdopt=false), охрана идёт всю сессию (guardWindowSec=0).
+    # Версии:
+    #   <2  - установки 2.5/2.6 (ключа cfgVersion нет);
+    #   2   - первый билд 2.6.1: гейт сравнивал дефолт с дефолтом и не мигрировал,
+    #         но cfgVersion=2 уже записал - такие конфиги лечим здесь;
+    #   >=3 - миграция выполнена, значения не трогаем (это выбор пользователя).
+    param($Config)
+    try {
+        $v = 0
+        if ($null -ne $Config.cfgVersion) { $v = [int]$Config.cfgVersion }
+        if ($v -ge 3) { return $false }
+        if ($null -eq $Config.allowAdopt) { $Config.allowAdopt = $false }
+        if ([int]$Config.guardWindowSec -eq 120) { $Config.guardWindowSec = 0 }
+        $Config.cfgVersion = 3
+        # $true всегда: даже когда значения уже верные, cfgVersion надо записать,
+        # иначе миграция будет пересчитываться на каждом старте
+        return $true
+    } catch { return $false }
 }
 
 # ------------------------------------------------------------
@@ -164,6 +202,35 @@ function Find-GtaGameRoot {
         }
     }
     return $null
+}
+
+# ------------------------------------------------------------
+# state.json: устойчивое чтение (fault-injection: битый/чужой state)
+# Битый JSON не должен ронять watcher и не должен считаться доверенным
+# состоянием: возвращаем defaults, а решение "safe mode" принимает watcher.
+# ------------------------------------------------------------
+function Get-DefaultState {
+    return @{ schema = 2; phase = 'Idle'; gamePid = $null; sessionStart = $null; guardRollbacks = 0
+              restarts = 0; applied = $false; lastApplyUtc = $null; gamePath = $null }
+}
+
+function Read-MgState {
+    param([string]$Path)
+    $default = Get-DefaultState
+    if (-not (Test-Path -LiteralPath $Path)) { return $default }
+    try {
+        $loaded = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json
+        if (-not $loaded -or -not $loaded.phase) { return $default }
+        if ([string]$loaded.phase -notin @('Idle', 'InGame', 'UnknownSession')) { return $default }
+        # schema 1 had sessionReapplied - deliberately dropped: it silently killed adopt
+        return @{ schema = 2; phase = [string]$loaded.phase; gamePid = $loaded.gamePid
+                  sessionStart = $loaded.sessionStart; guardRollbacks = [int]$loaded.guardRollbacks
+                  restarts = [int]$loaded.restarts; applied = [bool]$loaded.applied
+                  lastApplyUtc = $loaded.lastApplyUtc
+                  # MG-CR-014: путь exe нужен takeover-проверке; без него она
+                  # пропускается и PID-reuse снова неотличим от своей игры
+                  gamePath = $loaded.gamePath }
+    } catch { return $default }
 }
 
 # ------------------------------------------------------------
@@ -441,6 +508,10 @@ function Resolve-MgPaths {
         $cfg.docsRoot = $docsPin
         $changed = $true
     }
+    # 2.6.1: одноразовая миграция политики (см. Update-MgConfigPolicy):
+    # установки 2.5/2.6 несут installer-default'ы onExit=adopt и guardWindowSec=120,
+    # из-за которых защита вела себя не как в 1.x
+    if (Update-MgConfigPolicy $cfg) { $changed = $true }
     if (-not $NoSave -and $changed) {
         if (-not (Save-MgConfig $cfg)) { Write-Warning 'MG Helper: paths discovered but config.json could NOT be saved - discovery will repeat next start' }
     }
@@ -488,15 +559,28 @@ function Test-GoldenValid {
 }
 
 function Get-ValidGolden {
-    param([string]$CfgSettingsXml)
+    # 2.6.1: по умолчанию источником "лечения" может быть только НАШ эталон
+    # (settings.golden.xml или его .bak, который создаётся при adopt). Раньше в
+    # цепочку входили settings.before_apply.bak и ЖИВОЙ settings.xml, то есть при
+    # повреждённом эталоне защита молча начинала защищать чужие настройки
+    # (перезапись лаунчера). Живой fallback доступен только по явному запросу
+    # (-AllowLiveFallback): так эталон восстанавливают осознанно - установщик
+    # при невалидном эталоне копирует живые настройки сам, а этот ключ
+    # оставлен для скриптов/проверок, которым нужен именно живой бэкап.
+    param([string]$CfgSettingsXml, [switch]$AllowLiveFallback)
     $chain = @(
         (Join-Path $script:HelperDir 'settings.golden.xml'),
-        (Join-Path $script:HelperDir 'settings.golden.xml.bak'),
-        (Join-Path $script:HelperDir 'settings.before_apply.bak'),
-        $CfgSettingsXml
+        (Join-Path $script:HelperDir 'settings.golden.xml.bak')
     )
+    if ($AllowLiveFallback) {
+        $chain += @(
+            (Join-Path $script:HelperDir 'settings.before_apply.bak'),
+            $CfgSettingsXml
+        )
+    }
+    $first = $chain[0]
     foreach ($c in ($chain | Where-Object { $_ } | Select-Object -Unique)) {
-        if (Test-GoldenValid $c) { return @{ path = $c; healed = ($c -ne $chain[0]) } }
+        if (Test-GoldenValid $c) { return @{ path = $c; healed = ($c -ne $first) } }
     }
     return $null
 }
@@ -526,6 +610,83 @@ function Apply-Golden {
 function Get-FileMtimeUtc {
     param([string]$Path)
     try { return (Get-Item -LiteralPath $Path -ErrorAction Stop).LastWriteTimeUtc } catch { return [datetime]::MinValue }
+}
+
+function ConvertTo-UtcTime {
+    # 2.6.1: ЛЮБОЕ время из state.json перед сравнением с mtime приводится к UTC.
+    # Без этого [datetime] разбирает "…+03:00" как Local и сравнивает локальные
+    # тики с UTC-тиками Get-FileMtimeUtc: после перезапуска watcher'а
+    # "файл изменился после нас" становилось всегда ложным (adopt молча отключался).
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    try {
+        $d = [datetime]$Value
+        if ($d.Kind -eq [System.DateTimeKind]::Unspecified) {
+            $d = [datetime]::SpecifyKind($d, [System.DateTimeKind]::Local)
+        }
+        return $d.ToUniversalTime()
+    } catch { return $null }
+}
+
+# ------------------------------------------------------------
+# 2.6.1 (MG3-002): watcher.health.json - доказательство живости watcher'а.
+# watcher.ready говорит только "когда-то запускался" и после аварии остаётся,
+# поэтому трей и диагностика обязаны смотреть на свежий heartbeat, а не на файл.
+# ------------------------------------------------------------
+function Get-WatcherHealthPath { Join-Path $script:HelperDir 'watcher.health.json' }
+
+function Write-WatcherHealth {
+    # атомарно (tmp -> Replace): читатель никогда не видит половину JSON
+    param([string]$Status = 'running', [string]$Phase = 'Idle', $GamePid = $null,
+          [string]$Version = '', [int]$Sequence = 0, [string]$LastErrorCode = $null)
+    try {
+        $startUtc = (Get-Date).ToUniversalTime()
+        $p = Get-Process -Id $PID -ErrorAction SilentlyContinue
+        if ($p) { try { $startUtc = $p.StartTime.ToUniversalTime() } catch {} }
+        $j = [ordered]@{
+            schemaVersion    = 1
+            pid              = $PID
+            processStartUtc  = $startUtc.ToString('o')
+            version          = $Version
+            status           = $Status
+            phase            = $Phase
+            gamePid          = $GamePid
+            lastHeartbeatUtc = (Get-Date).ToUniversalTime().ToString('o')
+            sequence         = $Sequence
+            lastErrorCode    = $LastErrorCode
+        }
+        New-Item -ItemType Directory -Force -Path $script:HelperDir | Out-Null
+        $path = Get-WatcherHealthPath
+        $tmp = "$path.$PID.tmp"
+        [IO.File]::WriteAllText($tmp, ($j | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+        if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) }
+        else { Move-Item -LiteralPath $tmp $path -Force }
+        return $true
+    } catch { return $false }
+}
+
+function Get-WatcherHealth {
+    # tri-state для потребителей (трей, diagnose):
+    #   Healthy  - status=running, heartbeat <= 15 c
+    #   Degraded - 15..30 c или status=starting
+    #   Stopped  - status=stopping, просрочка > 30 c
+    #   Unknown  - файла нет / JSON битый / нет метки времени
+    $path = Get-WatcherHealthPath
+    if (-not (Test-Path -LiteralPath $path)) { return @{ status = 'Unknown'; data = $null; ageSec = $null } }
+    try { $d = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json } catch {
+        return @{ status = 'Unknown'; data = $null; ageSec = $null }
+    }
+    $hb = ConvertTo-UtcTime $d.lastHeartbeatUtc
+    if (-not $hb) { return @{ status = 'Unknown'; data = $d; ageSec = $null } }
+    $age = ((Get-Date).ToUniversalTime() - $hb).TotalSeconds
+    if ($d.status -eq 'stopping') { return @{ status = 'Stopped'; data = $d; ageSec = $age } }
+    # 2.6.1: status=starting - это ещё не рабочий watcher (он поднимает FSW,
+    # сверяет ключ эталона и состояние). Свежий heartbeat тут не доказательство
+    # защиты, поэтому Degraded, как и в трее.
+    if ($d.status -eq 'starting') { return @{ status = 'Degraded'; data = $d; ageSec = $age } }
+    if ($age -le 15) { return @{ status = 'Healthy'; data = $d; ageSec = $age } }
+    if ($age -le 30) { return @{ status = 'Degraded'; data = $d; ageSec = $age } }
+    return @{ status = 'Stopped'; data = $d; ageSec = $age }
 }
 
 function Get-XmlSignature {
@@ -574,21 +735,30 @@ function Test-SameSettings {
 }
 
 function Test-GuardActive {
-    # the drift-guard may run ONLY inside the launch window: that is when
-    # Majestic/MG patch settings.xml. Later writes are the user's own changes.
+    # 2.6.1: охрана идёт ВСЮ сессию (WindowSec <= 0). Окно в 120 с было главной
+    # дырой: перезапись, пришедшая позже, не откатывалась и на выходе уходила в эталон.
+    # WindowSec > 0 - старое поведение (только первые N секунд). Время - в UTC:
+    # SessionStart может быть прочитан из state.json (Local) - см. ConvertTo-UtcTime.
     param($SessionStart, [int]$WindowSec, [bool]$GuardEnabled, [bool]$GameRunning)
     if (-not $GuardEnabled -or -not $GameRunning -or -not $SessionStart) { return $false }
-    return (((Get-Date) - $SessionStart).TotalSeconds -lt $WindowSec)
+    $start = ConvertTo-UtcTime $SessionStart
+    if (-not $start) { return $false }
+    if ($WindowSec -le 0) { return $true }
+    return (((Get-Date).ToUniversalTime() - $start).TotalSeconds -lt $WindowSec)
 }
 
 function Test-AdoptCandidate {
     # pure decision: may the on-disk settings become the new golden?
     # $Same is the tri-state result of Test-SameSettings.
+    # $ChangedAfterUs: сравнение mtime и lastApplyUtc должно быть в UTC.
+    # $AllowAdopt: 2.6.1 - adopt выполняет ТОЛЬКО config "allowAdopt": true
+    #   (ключ onExit устарел). Без него эталон при выходе восстанавливается,
+    #   как в первой версии, и чужая перезапись не может стать эталоном.
     # $AppliedThisSession: WE must have applied the golden at least once this
     # session. Otherwise $lastApplyUtc is MinValue, "changed after us" is always
     # true, and a Majestic overwrite could be adopted as the user's choice.
-    param([bool]$ChangedAfterUs, [bool]$OnExitAdopt, $Same, [bool]$AppliedThisSession)
-    return ($OnExitAdopt -and $AppliedThisSession -and $ChangedAfterUs -and ($Same -eq $false))
+    param([bool]$ChangedAfterUs, [bool]$AllowAdopt, $Same, [bool]$AppliedThisSession)
+    return ($AllowAdopt -and $AppliedThisSession -and $ChangedAfterUs -and ($Same -eq $false))
 }
 
 # ------------------------------------------------------------
@@ -980,12 +1150,19 @@ function Snapshot-MgFiles {
         # flattening is ambiguous if a folder/file name itself contains '__';
         # restore prefers the manifest and falls back to the legacy decode.
         $manifest = [ordered]@{}
+        # 2.6.1: roots.json - полный путь папки-источника для каждого файла.
+        # Без него восстановление не знает, куда возвращать файл: 20 из 21 файла
+        # на реальной машине лежат в %LOCALAPPDATA%\MiamiGraphics, а не в той
+        # папке, которую config.json выбрал основной. Отдельный файл, а не ключ
+        # внутри manifest.json: manifest читают старые установленные версии.
+        $roots = [ordered]@{}
         $n = 0
         foreach ($dir in $dirs) {
             $rootFlat = ($dir -replace '[:\\/]', '_')
             foreach ($f in (Get-ChildItem $dir -Recurse -Depth 2 -Filter '*.json' -ErrorAction SilentlyContinue)) {
                 $name = "$rootFlat`__f$n.json"
                 $manifest[$name] = $f.FullName.Substring($dir.Length).TrimStart('\')
+                $roots[$name] = $dir
                 Copy-Item -LiteralPath $f.FullName (Join-Path $genDir $name) -Force
                 $n++
             }
@@ -997,6 +1174,11 @@ function Snapshot-MgFiles {
             [IO.File]::WriteAllText($tmp, ($manifest | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
             if (Test-Path -LiteralPath $mf) { [IO.File]::Replace($tmp, $mf, [NullString]::Value) }
             else { Move-Item -LiteralPath $tmp -Destination $mf -Force }
+            $rf = Join-Path $genDir 'roots.json'
+            $rtmp = "$rf.tmp"
+            [IO.File]::WriteAllText($rtmp, ($roots | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $rf) { [IO.File]::Replace($rtmp, $rf, [NullString]::Value) }
+            else { Move-Item -LiteralPath $rtmp -Destination $rf -Force }
             # retention: keep the newest 5 generations (legacy flat files are
             # untouched - restore still understands them as a fallback)
             Get-ChildItem $snapRoot -Directory -ErrorAction SilentlyContinue |

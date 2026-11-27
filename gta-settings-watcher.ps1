@@ -192,7 +192,11 @@ $stopEvent = $null
 try {
     $stopEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, $StopEvent)
     $stopEvent.Reset()   # stale-signalled event from a previous instance must not stop us
-} catch { $stopEvent = $null }
+} catch { $stopEvent = $null; Log "[MG-E-0105] stop event unavailable (file flag still works): $_" }
+# 2.6.1: именованное событие может быть недоступно (другая сессия, политика объектов).
+# Резервный канал - файл stop.request: меню пишет его, watcher проверяет каждый тик.
+# Флаг от прошлого запуска не должен останавливать новый экземпляр.
+try { Remove-Item -LiteralPath (Join-Path $HelperDir 'stop.request') -Force -ErrorAction SilentlyContinue } catch {}
 
 # ---------------- settings + golden ----------------
 $cfg = Resolve-MgPaths -ForceFull
@@ -220,33 +224,50 @@ if (-not (Test-GoldenValid $Golden)) {
 }
 
 # ---------------- state machine (persistent) ----------------
-$state = @{ schema = 2; phase = 'Idle'; gamePid = $null; sessionStart = $null; guardRollbacks = 0; restarts = 0
-            applied = $false; lastApplyUtc = $null }   # additive fields, schema stays 2
+# Read-MgState (common.ps1) отдаёт defaults на битом/чужом JSON: watcher не падает,
+# а состояние не считается доверенным (при живой игре это UnknownSession - safe mode).
 $stateFile = $StateFile
-try {
-    if (Test-Path -LiteralPath $stateFile) {
-        $loaded = Get-Content -LiteralPath $stateFile -Raw -ErrorAction Stop | ConvertFrom-Json
-        if ($loaded.phase) {
-            # schema 1 had sessionReapplied - deliberately dropped: it silently killed adopt
-            $state = @{ schema = 2; phase = $loaded.phase; gamePid = $loaded.gamePid
-                        sessionStart = $loaded.sessionStart; guardRollbacks = [int]$loaded.guardRollbacks
-                        restarts = [int]$loaded.restarts
-                        applied = [bool]$loaded.applied; lastApplyUtc = $loaded.lastApplyUtc }
-        }
-    }
-} catch {}
+$state = Read-MgState -Path $stateFile
 
-# exit policy from config (adopt = user changes in game survive)
-$onExit = 'adopt'
-if ($cfg.onExit) { $onExit = [string]$cfg.onExit }
+# 2.6.1: adopt - это ОПЦИЯ, а не политика по умолчанию. Единственный его
+# включатель - config "allowAdopt": true. Ключ onExit устарел: при "adopt" он
+# больше НЕ включает adopt (иначе чужая перезапись, пришедшая после окна
+# охраны, молча становилась новым эталоном - поведение, которого в v1 не было).
+$allowAdopt = $false
+if ($null -ne $cfg.allowAdopt) { $allowAdopt = [bool]$cfg.allowAdopt }
+$legacyOnExit = ''
+if ($cfg.onExit) { $legacyOnExit = [string]$cfg.onExit }
 # in-session drift-guard (config kill-switch)
 $sessionGuard = $true
 if ($null -ne $cfg.sessionGuard) { $sessionGuard = [bool]$cfg.sessionGuard }
-# the guard is active ONLY this many seconds after the game starts: that is when
-# Majestic/MG patch settings.xml. Anything written later is the user's own change
-# and must survive until adopt-on-exit. 0 = guard off.
-$GuardWindowSec = 120
+# 2.6.1: 0 = охранять ВСЮ сессию (как в v1), >0 = только первые N секунд после
+# обнаружения процесса игры. Окно в 120 с было главной дырой: перезапись,
+# пришедшая позже, не откатывалась и на выходе уходила в эталон.
+$GuardWindowSec = 0
 if ($null -ne $cfg.guardWindowSec) { $GuardWindowSec = [int]$cfg.guardWindowSec }
+
+# ------------------------------------------------------------
+# 2.6.1 (MG3-002): watcher.health.json - доказательство живости watcher'а.
+# watcher.ready говорит только "когда-то стартовал" и после аварии остаётся на
+# диске, поэтому трей и diagnose судят по СВЕЖЕМУ heartbeat (<=15 c), а не по
+# наличию файла. Один источник правды для обоих потребителей.
+# ------------------------------------------------------------
+$script:healthSeq = 0
+$script:healthPhase = $null
+$script:healthError = $null
+function Update-Health {
+    param([string]$Status = 'running', [string]$ErrorCode = $null)
+    try {
+        $script:healthSeq++
+        if ($null -ne $ErrorCode) { $script:healthError = $ErrorCode }
+        $gp = $null
+        if ($state.gamePid) { try { $gp = [int]$state.gamePid } catch { $gp = $null } }
+        Write-WatcherHealth -Status $Status -Phase ([string]$state.phase) -GamePid $gp `
+            -Version (Get-PkgVersion) -Sequence $script:healthSeq -LastErrorCode $script:healthError | Out-Null
+        $script:healthPhase = [string]$state.phase
+    } catch {}
+}
+Update-Health -Status 'starting'
 
 # autostart: verify scheduled task exists (Run key is legacy - NOT recreated)
 if (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {
@@ -265,7 +286,10 @@ elseif ($binsStatus -eq 'failed') {
     Log "[MG-E-0202] vanilla bins could NOT be restored - Majestic may hit error 1002 this launch"
 }
 
-Log "Watcher $(Get-PkgVersion) started (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
+Log "Watcher $(Get-PkgVersion) started (adopt=$allowAdopt, guard=$sessionGuard window=${GuardWindowSec}s, settings: $SettingsXml)"
+if ($legacyOnExit -eq 'adopt') {
+    Log "[!] config onExit=adopt устарел: adopt больше не включается этим ключом (нужен allowAdopt: true) - эталон будет восстанавливаться при выходе"
+}
 
 # ROADMAP 2.1: reconcile unfinished operations (crashed profiles/reset/import,
 # torn archive generations, stale tmp files) before anything else runs
@@ -313,6 +337,7 @@ if (-not $wasRunning) {
         $wasRunning = $true
         Save-State $state
         Log '[!] game already running and state is not trusted - SAFE MODE (no golden apply, no adopt) until the game closes'
+        Ev 'session.unknown' 'game already running, state not trusted'
     }
 }
 # ROADMAP 2.3: per-variant/per-GPU golden key - a changed game variant or GPU
@@ -327,6 +352,7 @@ if ((Test-GoldenKeyCurrent) -eq $false) {
     Save-State $state
     Log "[MG-E-0301] ИГРА/GPU изменились с момента создания эталона - SAFE MODE (без авто-применения и adopt). Новый эталон: меню [11]."
     Ev 'golden.mismatch' 'variant or GPU changed'
+    if ($state.phase -eq 'UnknownSession') { Ev 'session.unknown' 'golden key mismatch' }
 }
 elseif (-not (Get-SavedGoldenKey)) {
     # legacy install: backfill the key from the current setup
@@ -338,6 +364,7 @@ $script:wasLauncher = $false
 $errStreak = 0
 $lastErrAt = Get-Date
 $lastGuardReapply = [datetime]::MinValue
+$guardExpiredNotified = $false         # 2.6.1: событие guard.window_expired - один раз за сессию
 $lastApplyUtc = [datetime]::MinValue   # mtime of settings.xml right after OUR last write
 $appliedThisSession = $false           # did WE successfully apply golden in THIS session?
 $script:restartPending = $false
@@ -347,13 +374,18 @@ $script:lastTrayStart = [datetime]::MinValue   # tray auto-restart rate limiter
 $ReadyFile = Join-Path $HelperDir 'watcher.ready'
 [IO.File]::WriteAllText($ReadyFile, "ready=$(Get-Date -Format 'o') version=$(Get-PkgVersion)" + [char]13 + [char]10, [Text.UTF8Encoding]::new($false))
 Log "[i] watcher READY (mutex held, config loaded, state initialised)"
+Ev 'watcher.ready' "version=$(Get-PkgVersion)"
+Update-Health -Status 'running'
 $sessionStart = $null
-if ($state.sessionStart) { try { $sessionStart = [datetime]$state.sessionStart } catch { $sessionStart = $null } }
+# 2.6.1: любое время из state.json приводится к UTC (ConvertTo-UtcTime) - иначе
+# после перезапуска watcher'а "файл изменился после нас" всегда ложно, и правки
+# игрока молча откатывались на выходе (ошибка часового пояса).
+if ($state.sessionStart) { $sessionStart = ConvertTo-UtcTime $state.sessionStart }
 if ($wasRunning) {
     # takeover after a mid-session restart: restore the adopt evidence too,
     # otherwise the exit branch would see MinValue and could adopt foreign writes
     $appliedThisSession = [bool]$state.applied
-    if ($state.lastApplyUtc) { try { $lastApplyUtc = [datetime]$state.lastApplyUtc } catch {} }
+    if ($state.lastApplyUtc) { $u = ConvertTo-UtcTime $state.lastApplyUtc; if ($u) { $lastApplyUtc = $u } }
 }
 
 # ROADMAP 1.1: hybrid event model - a FileSystemWatcher on the settings.xml
@@ -398,6 +430,19 @@ while ($true) {
 
     # cooperative stop
     try { if ($stopEvent -and $stopEvent.WaitOne(0)) { Log 'stop requested (event)'; break } } catch {}
+    # 2.6.1: файловый флаг - резервный канал остановки (см. MG-E-0105)
+    try {
+        if (Test-Path -LiteralPath (Join-Path $HelperDir 'stop.request')) {
+            Remove-Item -LiteralPath (Join-Path $HelperDir 'stop.request') -Force -ErrorAction SilentlyContinue
+            Log 'stop requested (file flag)'
+            break
+        }
+    } catch {}
+
+    # 2.6.1 (MG3-002): heartbeat раз в тик (~5 с) и на каждом изменении фазы.
+    # Трей и diagnose отличают живого watcher'а от мёртвого по свежести файла,
+    # поэтому он пишется и в Idle, и в InGame, а не раз в 30 минут в лог.
+    Update-Health
 
     try {
         # re-discover settings.xml if it vanished
@@ -433,12 +478,19 @@ while ($true) {
         $running  = [bool]$procs
         $launcher = [bool](Find-MatchingProcess -Patterns $cfg.launcherProcesses)
 
-        # fast relaunch (crash + restart within one poll): a NEW pid means a NEW
-        # session - without this, the old sessionStart/appliedThisSession survive
-        # and the launcher's overwrite could be adopted as the user's choice
-        $newPid = ($procs | Select-Object -First 1).Id
-        if ($running -and $wasRunning -and ($state.phase -eq 'InGame') -and ($newPid -ne $state.gamePid)) {
-            Log "[i] new game PID $newPid != $($state.gamePid) - treating as a new session"
+        # fast relaunch (crash + restart within one poll): a NEW session starts
+        # only when the RECORDED game process is really gone. Раньше сравнивался
+        # первый попавшийся процесс из Find-MatchingProcess: Majestic запускает
+        # игру из своей папки backup\GTA5.exe, под шаблон отвечали два процесса,
+        # порядок перечисления недетерминирован - и watcher по 6 раз за сессию
+        # решал, что игра перезапустилась (повторный снапшот и apply посреди игры).
+        # Теперь: выбор процесса детерминирован (сортировка по Id), а "новая
+        # сессия" - только если процесса с записанным PID больше нет.
+        $newPid = ($procs | Sort-Object Id | Select-Object -First 1).Id
+        $recordedAlive = $false
+        if ($state.gamePid) { $recordedAlive = @($procs | Where-Object { $_.Id -eq $state.gamePid }).Count -gt 0 }
+        if ($running -and $wasRunning -and ($state.phase -eq 'InGame') -and (-not $recordedAlive)) {
+            Log "[i] new game PID $newPid != $($state.gamePid) (recorded process is gone) - treating as a new session"
             $wasRunning = $false   # the launch branch below re-initialises everything
         }
 
@@ -470,8 +522,10 @@ while ($true) {
                 $preBackupOk = $true
             } catch { Log "[MG-E-0102] pre-apply backup FAILED: $_ - golden will NOT be applied (nothing overwritten)" }
             Ensure-BinsRestored -Cfg $cfg | Out-Null
-            $sessionStart = Get-Date
+            # 2.6.1: время сессии хранится и сравнивается ТОЛЬКО в UTC
+            $sessionStart = (Get-Date).ToUniversalTime()
             $lastGuardReapply = [datetime]::MinValue
+            $guardExpiredNotified = $false
             $appliedThisSession = $false
             $lastApplyUtc = [datetime]::MinValue
             # ROADMAP 2.3: re-check the key at every session start (GPU is written
@@ -481,10 +535,21 @@ while ($true) {
                 Log "[!] golden mismatch - NOT applying; create a fresh golden via menu [11]"
                 Ev 'golden.mismatch' 'session start'
             }
-            elseif ($preBackupOk -and (Apply-Golden -Cfg $cfg)) {
-                Log "GTA5 launched -> settings applied"
-                $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
-                $appliedThisSession = $true
+            elseif ($preBackupOk) {
+                if (Apply-Golden -Cfg $cfg) {
+                    Log "GTA5 launched -> settings applied"
+                    $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                    $appliedThisSession = $true
+                    Ev 'golden.applied' 'launch'
+                } else {
+                    Log "[MG-E-0104] apply FAILED - settings.xml NOT written (golden unreadable or locked)"
+                    Ev 'apply.failed' 'launch'
+                }
+            }
+            else {
+                # MG-CR-006: nothing was written, so the user's file is intact -
+                # but the state must say it out loud instead of looking protected
+                Ev 'apply.failed' 'pre-apply backup failed'
             }
             if ($cfg.autoCleanDlccache) { Clean-Dlccache -Cfg $cfg }
             $state.phase = 'InGame'
@@ -496,6 +561,8 @@ while ($true) {
             $state.applied = $appliedThisSession
             $state.lastApplyUtc = $lastApplyUtc.ToString('o')
             Save-State $state
+            Ev 'session.start' "pid=$newPid"
+            Update-Health
             Start-Sleep -Seconds 3
             # one safety re-apply if overwritten right after launch ($null = unreadable -> skip)
             if ((Find-MatchingProcess -Patterns $cfg.gameProcesses) -and ((Test-SameSettings $cfg.settingsXml $Golden) -eq $false)) {
@@ -505,6 +572,10 @@ while ($true) {
                     $appliedThisSession = $true
                     $state.applied = $true; $state.lastApplyUtc = $lastApplyUtc.ToString('o')
                     Save-State $state
+                    Ev 'golden.applied' 'reapply'
+                } else {
+                    Log "[MG-E-0104] re-apply after launch FAILED"
+                    Ev 'apply.failed' 'reapply'
                 }
             }
         }
@@ -530,13 +601,15 @@ while ($true) {
                 $state.applied = $false
                 $state.lastApplyUtc = $null
                 Save-State $state
+                Ev 'session.end' 'unknown-session'
+                Update-Health
                 $sessionStart = $null
             }
             else {
             $adopted = $false
             $same = Test-SameSettings $cfg.settingsXml $Golden          # $true / $false / $null
             $changedAfterUs = ((Get-FileMtimeUtc $cfg.settingsXml) -gt $lastApplyUtc.AddSeconds(2))
-            if ((Test-AdoptCandidate $changedAfterUs ($onExit -eq 'adopt') $same $appliedThisSession) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
+            if ((Test-AdoptCandidate $changedAfterUs $allowAdopt $same $appliedThisSession) -and (Test-ValidSettingsXml $cfg.settingsXml)) {
                 # adopt: the user's in-game changes become the new golden
                 $stamp = Get-Date -Format 'yyyy-MM-dd_HHmmss'
                 # REVIEW-#4: rotate the old golden into .bak - the self-heal chain
@@ -550,13 +623,17 @@ while ($true) {
                 } else {
                     Log "exit: settings changed in game - adopted as new golden"
                     $adopted = $true
+                    Ev 'adopt.accepted' 'session'
+                    # новая эталон-пара: ключ эталона должен соответствовать
+                    # текущей машине, иначе следующий старт уйдёт в SAFE MODE
+                    $null = Save-GoldenKey -Cfg $cfg
                 }
             }
             elseif ($null -eq $same) { Log "[i] exit: settings.xml unreadable - golden kept, adopt skipped" }
             elseif ($same) { Log "GTA5 closed -> settings unchanged, golden kept" }
             elseif (-not $appliedThisSession) { Log "GTA5 closed -> golden never applied this session - adopt skipped (foreign overwrite?)" }
             elseif (-not $changedAfterUs) { Log "GTA5 closed -> nobody wrote after our apply - golden kept" }
-            else { Log "GTA5 closed -> onExit=$onExit - user changes not adopted" }
+            else { Log "GTA5 closed -> adopt disabled (allowAdopt=$allowAdopt) - user changes not adopted" }
             # REVIEW-#3: the exit-restore may only run when WE successfully
             # applied the golden this session - otherwise (pre-apply backup
             # failed, apply blocked) restoring here would DESTROY the user's
@@ -565,6 +642,10 @@ while ($true) {
                 if (Apply-Golden -Cfg $cfg) {
                     Log "GTA5 closed -> golden restored"
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
+                    Ev 'golden.applied' 'exit-restore'
+                } else {
+                    Log "[MG-E-0104] exit-restore FAILED - settings.xml not restored"
+                    Ev 'apply.failed' 'exit-restore'
                 }
             }
             }
@@ -583,6 +664,8 @@ while ($true) {
                 $state.applied = $false
                 $state.lastApplyUtc = $null
                 Save-State $state
+                Ev 'session.end' 'game closed'
+                Update-Health
             }
             $sessionStart = $null
             # deferred self-restart: safe now that the game is closed
@@ -599,7 +682,18 @@ while ($true) {
                 exit 1
             }
         }
-        # drift-guard: ONLY inside the launch window (Test-GuardActive).
+        # 2.6.1: истечение окна охраны (guardWindowSec > 0) - это переход в состояние
+        # "не защищаю", он обязан быть видимым: событие + строка в логе, один раз
+        # за сессию. При guardWindowSec=0 (по умолчанию) блок не срабатывает.
+        if ($GuardWindowSec -gt 0 -and $running -and $sessionStart -and (-not $goldenMismatch) -and
+            (-not $guardExpiredNotified) -and
+            (((Get-Date).ToUniversalTime() - $sessionStart).TotalSeconds -ge $GuardWindowSec)) {
+            $guardExpiredNotified = $true
+            Log "guard: window ${GuardWindowSec}s expired - foreign writes are NOT rolled back until the session ends"
+            Ev 'guard.window_expired' "$GuardWindowSec"
+        }
+        # drift-guard: окно охраны задаёт Test-GuardActive. С 2.6.1 по умолчанию
+        # (guardWindowSec=0) это ВСЯ сессия; >0 - только первые N секунд.
         # Rollbacks here are foreign overwrites by Majestic/MG - they must NOT
         # disable adopt-on-exit: the user's own later changes are legitimate.
         # ROADMAP 1.1: an FSW event ($dirtyNow) triggers the check immediately
@@ -609,15 +703,36 @@ while ($true) {
             if ($dirtyNow) { Log "guard: FSW event - immediate check" }
             $same = Test-SameSettings $cfg.settingsXml $Golden
             if ($same -eq $false) {
-                if (Apply-Golden -Cfg $cfg) {
-                    Log "session guard: foreign overwrite in launch window - golden re-applied"
-                    Ev 'guard.rollback' 'foreign overwrite in launch window'
+                # MG-CR-006 (2.6.1): тот же предохранитель, что и в launch-ветке -
+                # чужой файл нельзя затирать, не имея копии для отката. Раньше
+                # guard-ветка обходила $preBackupOk: при несостоявшемся бэкапе
+                # откат всё равно происходил, и вернуть настройки игрока было нечем.
+                $guardBak = Join-Path $HelperDir 'settings.before_apply.bak'
+                $guardBakOk = Test-Path -LiteralPath $guardBak
+                if (-not $guardBakOk) {
+                    try {
+                        Copy-Item -LiteralPath $cfg.settingsXml $guardBak -Force -ErrorAction Stop
+                        $guardBakOk = $true
+                        Log "[i] guard: pre-apply backup created from the file about to be overwritten"
+                    } catch { $guardBakOk = $false }
+                }
+                if (-not $guardBakOk) {
+                    Log "[MG-E-0102] guard: no recovery copy - rollback SKIPPED (settings.xml untouched)"
+                    Ev 'apply.failed' 'guard: pre-apply backup failed'
+                }
+                elseif (Apply-Golden -Cfg $cfg) {
+                    Log "session guard: foreign overwrite - golden re-applied"
+                    Ev 'guard.rollback' 'foreign overwrite during session'
+                    Ev 'golden.applied' 'guard'
                     $lastApplyUtc = Get-FileMtimeUtc $cfg.settingsXml
                     $appliedThisSession = $true
                     $state.applied = $true
                     $state.lastApplyUtc = $lastApplyUtc.ToString('o')
                     $state.guardRollbacks = [int]$state.guardRollbacks + 1
                     Save-State $state
+                } else {
+                    Log "[MG-E-0104] session guard: rollback FAILED - foreign settings stay on disk"
+                    Ev 'apply.failed' 'guard rollback'
                 }
             }
             # equal or unreadable (game holds the file) -> back off, do not hammer the disk
@@ -635,11 +750,12 @@ while ($true) {
             $cfgNew = Get-MgConfig
             if ($cfgNew.settingsXml) {
                 $cfg = $cfgNew
-                $onExit = if ($cfg.onExit) { [string]$cfg.onExit } else { 'adopt' }
+                $allowAdopt = if ($null -ne $cfg.allowAdopt) { [bool]$cfg.allowAdopt } else { $false }
+                $legacyOnExit = if ($cfg.onExit) { [string]$cfg.onExit } else { '' }
                 $sessionGuard = if ($null -ne $cfg.sessionGuard) { [bool]$cfg.sessionGuard } else { $true }
-                $GuardWindowSec = if ($null -ne $cfg.guardWindowSec) { [int]$cfg.guardWindowSec } else { 120 }
+                $GuardWindowSec = if ($null -ne $cfg.guardWindowSec) { [int]$cfg.guardWindowSec } else { 0 }
             }
-            Log "[i] config reloaded (onExit=$onExit, guard=$sessionGuard window=${GuardWindowSec}s)"
+            Log "[i] config reloaded (adopt=$allowAdopt, guard=$sessionGuard window=${GuardWindowSec}s)"
             # ROADMAP 5.2: opt-in silent auto-update - only when completely idle
             if ($cfgNew.autoUpdate -and ($state.phase -eq 'Idle') -and
                 (-not (Find-MatchingProcess -Patterns $cfgNew.gameProcesses)) -and
@@ -706,6 +822,11 @@ while ($true) {
     }
 }
 
+# 2.6.1: нормальный выход - сначала status=stopping (потребители увидят это
+# сразу), затем снимается watcher.ready. Файл health остаётся с просроченным
+# heartbeat: трей покажет "Watcher не работает", а не "неизвестно".
+Update-Health -Status 'stopping'
+Ev 'watcher.stop' "version=$(Get-PkgVersion)"
 Log "watcher stopped"
 try { Remove-Item -LiteralPath $ReadyFile -Force -ErrorAction SilentlyContinue } catch {}
 # Snapshot-MgFiles lives in common.ps1 (Logger-aware, unit-tested by tools/check.ps1)

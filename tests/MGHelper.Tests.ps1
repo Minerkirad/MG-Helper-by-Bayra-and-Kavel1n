@@ -62,7 +62,7 @@ Describe 'Test-AdoptCandidate (adopt matrix, MG-CR poisoning regression)' {
     It 'never adopts without a successful apply this session' { Test-AdoptCandidate $true $true $false $false | Should -Be $false }
     It 'never adopts an unchanged file' { Test-AdoptCandidate $true $true $true $true | Should -Be $false }
     It 'never adopts an unreadable file' { Test-AdoptCandidate $true $true $null $true | Should -Be $false }
-    It 'respects onExit=restore' { Test-AdoptCandidate $true $false $false $true | Should -Be $false }
+    It 'respects allowAdopt=false (2.6.1: onExit no longer enables adopt)' { Test-AdoptCandidate $true $false $false $true | Should -Be $false }
 }
 
 Describe 'Test-GuardActive (launch window)' {

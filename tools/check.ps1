@@ -147,7 +147,7 @@ if (Test-AdoptCandidate $true $true $false $true) { Good 'adopt: user change aft
 if (-not (Test-AdoptCandidate $true $true $true $true)) { Good 'adopt: unchanged file is not adopted' } else { Bad 'adopt: unchanged file adopted' }
 if (-not (Test-AdoptCandidate $true $true $null $true)) { Good 'adopt: unreadable file is not adopted' } else { Bad 'adopt: unreadable file adopted' }
 if (-not (Test-AdoptCandidate $false $true $false $true)) { Good 'adopt: no write after our apply -> not adopted' } else { Bad 'adopt: adopted without a foreign write' }
-if (-not (Test-AdoptCandidate $true $false $false $true)) { Good 'adopt: onExit=restore respected' } else { Bad 'adopt: onExit ignored' }
+if (-not (Test-AdoptCandidate $true $false $false $true)) { Good 'adopt: allowAdopt=false respected' } else { Bad 'adopt: allowAdopt=false ignored' }
 if (-not (Test-AdoptCandidate $true $true $false $false)) { Good 'adopt: never-applied session cannot adopt (poisoning regression)' } else { Bad 'adopt: foreign overwrite adopted without our apply' }
 
 # 11k. Snapshot-MgFiles round-trip: '__' inside the MG path must resolve exactly,
@@ -394,21 +394,36 @@ if (-not (Test-ValidSettingsXml $vx)) { Good 'xml: wrong root rejected' } else {
 [IO.File]::WriteAllText($vx, '<Settings><graphics/></Settings><!-- $1 -->')
 if (Test-ValidSettingsXml $vx) { Good 'xml: $digit inside comment no longer a false rejection' } else { Bad 'xml: comment content false-rejected' }
 
-# 11n. MG-CR-002: Apply-Golden heals from the validated source and applies its bytes
+# 11n. MG-CR-002 + 2.6.1: Apply-Golden лечит ТОЛЬКО из нашего эталона
+# (settings.golden.xml / settings.golden.xml.bak). Живой settings.before_apply.bak
+# и живой settings.xml - не источник по умолчанию: иначе при повреждённом
+# эталоне защита молча начинала защищать чужую перезапись лаунчера.
+# Живой fallback - только явно (-AllowLiveFallback, installer/reset).
 $sbx = Join-Path $sandbox 'apply'
 New-Item -ItemType Directory -Force -Path $sbx | Out-Null
 $gGolden = Join-Path $sbx 'settings.golden.xml'
+$gGoldenBak = Join-Path $sbx 'settings.golden.xml.bak'
 $gBak = Join-Path $sbx 'settings.before_apply.bak'
 $gLive = Join-Path $sbx 'live_settings.xml'
 [IO.File]::WriteAllText($gGolden, 'TORN-GARBAGE-NOT-XML')
-[IO.File]::WriteAllText($gBak, "<?xml version=`"1.0`"?><Settings><golden>" + ('x' * 100) + "</golden></Settings>")
+[IO.File]::WriteAllText($gGoldenBak, "<?xml version=`"1.0`"?><Settings><golden>" + ('x' * 100) + "</golden></Settings>")
 [IO.File]::WriteAllText($gLive, 'OLD-LIVE')
 $script:HelperDir = $sbx
 $cfgA = @{ settingsXml = $gLive }
 $okA = Apply-Golden -Cfg $cfgA
 $liveOk = ([IO.File]::ReadAllText($gLive) -match '<golden>x{100}</golden>')
 $goldenOk = (Test-GoldenValid $gGolden)
-if ($okA -and $liveOk -and $goldenOk) { Good 'apply-golden: heals from validated source, applies same bytes, golden verified' } else { Bad "apply-golden: ok=$okA live=$liveOk goldenOk=$goldenOk" }
+if ($okA -and $liveOk -and $goldenOk) { Good 'apply-golden: heals from our golden .bak, applies same bytes, golden verified' } else { Bad "apply-golden: ok=$okA live=$liveOk goldenOk=$goldenOk" }
+# негативный случай: живого before_apply.bak недостаточно
+Remove-Item -LiteralPath $gGoldenBak -Force
+[IO.File]::WriteAllText($gGolden, 'TORN-GARBAGE-NOT-XML')
+[IO.File]::WriteAllText($gBak, "<?xml version=`"1.0`"?><Settings><foreign>" + ('y' * 50) + "</foreign></Settings>")
+[IO.File]::WriteAllText($gLive, 'USER-LIVE')
+$okB = Apply-Golden -Cfg $cfgA
+if ((-not $okB) -and ([IO.File]::ReadAllText($gLive) -eq 'USER-LIVE')) { Good 'apply-golden: live before_apply.bak is NOT healed silently (2.6.1)' } else { Bad "apply-golden: foreign backup healed (ok=$okB live=$([IO.File]::ReadAllText($gLive)))" }
+# тот же fallback, но запрошенный явно - разрешён
+$srcLive = Get-ValidGolden -CfgSettingsXml $gLive -AllowLiveFallback
+if ($srcLive -and ($srcLive.path -eq $gBak) -and $srcLive.healed) { Good 'apply-golden: -AllowLiveFallback reaches the live backup on request' } else { Bad 'apply-golden: -AllowLiveFallback does not reach the live backup' }
 $script:HelperDir = $sandbox
 
 # 11o. MG-CR-001: Save-MgConfig failure leaves the old config intact
@@ -528,6 +543,149 @@ New-Item -ItemType Directory -Force -Path $emptyGen | Out-Null
 $arcI = Get-LatestBinArchive
 if ($arcI -and ($arcI.dir.Name -ne '2030-01-01_000000')) { Good 'archive: empty newest generation skipped' } else { Bad 'archive: empty generation treated as latest' }
 Remove-Item $emptyGen -Recurse -Force
+
+# 11v. 2.6.1: миграция политики. Без неё guardWindowSec=120 остаётся у всех, кто
+# обновился, и охрана снова живёт только первые две минуты.
+$pOld = @{ cfgVersion = 0; onExit = 'adopt'; guardWindowSec = 120 }
+$null = Update-MgConfigPolicy $pOld
+if ($pOld.cfgVersion -eq 3 -and $pOld.allowAdopt -eq $false -and $pOld.guardWindowSec -eq 0) { Good 'policy: legacy 2.6 config migrates to whole-session guard + adopt off' } else { Bad "policy: legacy migration failed (v=$($pOld.cfgVersion) adopt=$($pOld.allowAdopt) window=$($pOld.guardWindowSec))" }
+$pMid = @{ cfgVersion = 2; onExit = 'adopt'; guardWindowSec = 120; allowAdopt = $false }
+$null = Update-MgConfigPolicy $pMid
+if ($pMid.cfgVersion -eq 3 -and $pMid.guardWindowSec -eq 0) { Good 'policy: config written by the first 2.6.1 build (v2, not migrated) is repaired' } else { Bad "policy: v2 config not repaired (v=$($pMid.cfgVersion) window=$($pMid.guardWindowSec))" }
+$pUser = @{ cfgVersion = 3; guardWindowSec = 300; allowAdopt = $true }
+$null = Update-MgConfigPolicy $pUser
+if ($pUser.guardWindowSec -eq 300 -and $pUser.allowAdopt -eq $true) { Good 'policy: deliberate user values (v3) are never overwritten' } else { Bad 'policy: deliberate user values overwritten' }
+
+# 11r. 2.6.1: сценарный блок «сессия целиком» на реальных функциях.
+# Применяется ли эталон и уходит ли файл в adopt - проверяется теми же
+# функциями, что и в watcher'е (Test-GuardActive, Test-SameSettings,
+# Test-AdoptCandidate, Apply-Golden), на файлах в песочнице.
+$sc = Join-Path $sandbox 'session'
+New-Item -ItemType Directory -Force -Path $sc | Out-Null
+$scGolden = Join-Path $sc 'settings.golden.xml'
+$scLive = Join-Path $sc 'settings.xml'
+$scUser = Join-Path $sc 'user_settings.xml'
+$scForeign = Join-Path $sc 'foreign_settings.xml'
+function New-Sc([string]$Path, [string]$Tag) {
+    # >100 байт: Test-GoldenValid отбрасывает подозрительно короткие файлы
+    [IO.File]::WriteAllText($Path, "<?xml version=`"1.0`"?><Settings><graphics><TextureQuality value=`"$Tag`" /></graphics><pad>" + ('x' * 120) + "</pad></Settings>")
+}
+New-Sc $scGolden 'GOLDEN'
+New-Sc $scForeign 'FOREIGN'
+New-Sc $scUser 'USER'
+$script:HelperDir = $sc
+$scCfg = @{ settingsXml = $scLive }
+$scStart = (Get-Date).ToUniversalTime()
+
+# 1) конфигурация по умолчанию: окно охраны - вся сессия, чужая запись откатывается
+if (Test-GuardActive $scStart 0 $true $true) { Good 'session: default config guards the WHOLE session (guardWindowSec=0)' } else { Bad 'session: guard inactive mid-session at guardWindowSec=0' }
+if (-not (Test-GuardActive $scStart.AddSeconds(-600) 120 $true $true)) { Good 'session: explicit guardWindowSec=120 still ends the window' } else { Bad 'session: guardWindowSec=120 ignored' }
+Copy-Item -LiteralPath $scForeign -Destination $scLive -Force
+$sameF = Test-SameSettings $scLive $scGolden
+$rolled = $false
+if ((Test-GuardActive $scStart 0 $true $true) -and ($sameF -eq $false)) { $rolled = Apply-Golden -Cfg $scCfg }
+if ($rolled -and ([IO.File]::ReadAllText($scLive)).Contains('value="GOLDEN"')) { Good 'session: foreign overwrite mid-session rolled back to the golden' } else { Bad "session: foreign overwrite not rolled back (rolled=$rolled same=$sameF)" }
+
+# 2) выход без allowAdopt: правка игрока не становится эталоном, на диске - эталон
+Copy-Item -LiteralPath $scUser -Destination $scLive -Force
+[IO.File]::WriteAllText((Join-Path $sc 'settings.golden.xml.bak'), [IO.File]::ReadAllText($scGolden))
+$sameU = Test-SameSettings $scLive $scGolden
+$adoptDefault = Test-AdoptCandidate $true $false $sameU $true
+$restored = $false
+if ((-not $adoptDefault) -and ($sameU -eq $false)) { $restored = Apply-Golden -Cfg $scCfg }
+if ((-not $adoptDefault) -and $restored -and ([IO.File]::ReadAllText($scLive)).Contains('value="GOLDEN"')) { Good 'session: exit with allowAdopt=false restores the golden (v1 semantics)' } else { Bad "session: exit without allowAdopt did not restore (adopt=$adoptDefault restored=$restored)" }
+
+# 3) allowAdopt=true и правка игрока ПОСЛЕ нашего применения - adopt
+Copy-Item -LiteralPath $scUser -Destination $scLive -Force
+$sameU2 = Test-SameSettings $scLive $scGolden
+if (Test-AdoptCandidate $true $true $sameU2 $true) { Good 'session: allowAdopt=true adopts the user change made after our apply' } else { Bad 'session: allowAdopt=true did not adopt the user change' }
+$null = Write-Atomic -Path $scGolden -Bytes ([IO.File]::ReadAllBytes($scLive))
+if (([IO.File]::ReadAllText($scGolden)).Contains('value="USER"')) { Good 'session: adopted settings became the new golden' } else { Bad 'session: adopted settings were not written to the golden' }
+
+# 4) allowAdopt=true, но писать после нас некому / мы не применяли - не adopt
+if (-not (Test-AdoptCandidate $false $true $false $true)) { Good 'session: allowAdopt does not adopt without a write after our apply' } else { Bad 'session: adopted without a foreign write' }
+if (-not (Test-AdoptCandidate $true $true $false $false)) { Good 'session: never-applied session cannot adopt (poisoning guard)' } else { Bad 'session: adopted without ever applying' }
+
+# 5) UTC: время из state.json (строка 'o' с локальным смещением) сравнивается верно
+$stampLocal = (Get-Date).AddMinutes(-30)
+$stateProbe = Join-Path $sc 'state.json'
+[IO.File]::WriteAllText($stateProbe, (@{ schema = 2; phase = 'InGame'; sessionStart = $stampLocal.ToString('o'); lastApplyUtc = $stampLocal.ToString('o') } | ConvertTo-Json -Compress))
+$probe = Get-Content -LiteralPath $stateProbe -Raw | ConvertFrom-Json
+$utc = ConvertTo-UtcTime $probe.lastApplyUtc
+$delta = [Math]::Abs(($utc - $stampLocal.ToUniversalTime()).TotalSeconds)
+if ($delta -lt 1) { Good 'session: state.json timestamps round-trip to the same UTC instant' } else { Bad "session: timestamp round-trip is off by $delta s (timezone bug)" }
+$script:HelperDir = $sandbox
+
+# 11s. 2.6.1 (MG3-002): watcher.health.json - четыре состояния по свежести
+$hm = Join-Path $sandbox 'health'
+New-Item -ItemType Directory -Force -Path $hm | Out-Null
+$script:HelperDir = $hm
+$null = Write-WatcherHealth -Status 'running' -Phase 'InGame' -GamePid 4242 -Version '2.6.1' -Sequence 7
+$hOk = Get-WatcherHealth
+if ($hOk.status -eq 'Healthy' -and $hOk.data.phase -eq 'InGame' -and [int]$hOk.data.gamePid -eq 4242) { Good 'health: fresh heartbeat -> Healthy with phase and game pid' } else { Bad "health: fresh heartbeat -> $($hOk.status)" }
+function Set-HealthAge([int]$Sec, [string]$Status) {
+    $p = Get-WatcherHealthPath
+    $d = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json
+    $d.lastHeartbeatUtc = (Get-Date).ToUniversalTime().AddSeconds(-$Sec).ToString('o')
+    $d.status = $Status
+    [IO.File]::WriteAllText($p, ($d | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+}
+Set-HealthAge 20 'running'
+if ((Get-WatcherHealth).status -eq 'Degraded') { Good 'health: 20 s old heartbeat -> Degraded' } else { Bad 'health: 20 s old heartbeat not Degraded' }
+Set-HealthAge 45 'running'
+if ((Get-WatcherHealth).status -eq 'Stopped') { Good 'health: 45 s old heartbeat -> Stopped' } else { Bad 'health: 45 s old heartbeat not Stopped' }
+Set-HealthAge 0 'starting'
+if ((Get-WatcherHealth).status -eq 'Degraded') { Good 'health: status=starting -> Degraded (not Healthy yet)' } else { Bad 'health: starting reported as Healthy' }
+Set-HealthAge 0 'stopping'
+if ((Get-WatcherHealth).status -eq 'Stopped') { Good 'health: status=stopping -> Stopped even with a fresh beat' } else { Bad 'health: stopping not reported as Stopped' }
+[IO.File]::WriteAllText((Get-WatcherHealthPath), '{not json', [Text.UTF8Encoding]::new($false))
+if ((Get-WatcherHealth).status -eq 'Unknown') { Good 'health: corrupt JSON -> Unknown' } else { Bad 'health: corrupt JSON not Unknown' }
+Remove-Item -LiteralPath (Get-WatcherHealthPath) -Force
+if ((Get-WatcherHealth).status -eq 'Unknown') { Good 'health: missing file -> Unknown' } else { Bad 'health: missing file not Unknown' }
+$script:HelperDir = $sandbox
+
+# 11t. 2.6.1: статические гарантии контракта в watcher'е (иначе поведение вернётся)
+$w26 = Get-Content (Join-Path $repo 'gta-settings-watcher.ps1') -Raw
+if ($w26 -notmatch 'allowAdopt') { Bad 'watcher 2.6.1: allowAdopt key is not read' }
+if ($w26 -match '\(\$onExit\s+-eq\s+.adopt.\)') { Bad 'watcher 2.6.1: onExit still enables adopt' }
+if ($w26 -notmatch '\$GuardWindowSec = 0') { Bad 'watcher 2.6.1: guardWindowSec default is not 0 (whole session)' }
+foreach ($evName in 'golden\.applied', 'adopt\.accepted', 'apply\.failed', 'session\.start', 'session\.end', 'session\.unknown', 'guard\.window_expired', 'watcher\.stop') {
+    if ($w26 -notmatch ("Ev '" + $evName + "'")) { Bad "watcher 2.6.1: event $evName is never emitted" }
+}
+if ($w26 -notmatch 'Update-Health') { Bad 'watcher 2.6.1: watcher.health.json is never written from the loop' }
+if ($w26 -notmatch 'ConvertTo-UtcTime') { Bad 'watcher 2.6.1: state.json timestamps are not normalised to UTC' }
+if ($w26 -notmatch 'guardBakOk') { Bad 'watcher 2.6.1: guard rollback does not require a recovery copy (MG-CR-006 bypass is back)' }
+# 2.6.1: остановка watcher'а не должна зависеть только от именованного события -
+# на живой машине OpenExisting('Local\MG_Helper_Stop') не находил объект
+if ($w26 -notmatch 'stop\.request') { Bad 'watcher 2.6.1: file-based stop fallback missing (menu restart relies on a named event)' }
+$mgMenu = Get-Content (Join-Path $repo 'MG-Helper.ps1') -Raw
+if ($mgMenu -notmatch 'stop\.request') { Bad 'menu 2.6.1: Restart-Watcher has no stop.request fallback' }
+
+# 11u. Fault-injection (этап A ревью 3.0): сценарии, которые раньше не покрывались
+# a) битый/чужой state.json при живой игре -> defaults, watcher не падает,
+#    а состояние не считается доверенным (дальше он уходит в UnknownSession)
+$badState = Join-Path $sandbox 'bad_state.json'
+[IO.File]::WriteAllText($badState, '{"phase":"InGame","gamePid":')
+$s1 = Read-MgState -Path $badState
+if ($s1.phase -eq 'Idle' -and (-not $s1.applied) -and ($null -eq $s1.gamePid)) { Good 'state: torn JSON -> defaults (watcher cannot crash on it)' } else { Bad "state: torn JSON -> phase=$($s1.phase) applied=$($s1.applied)" }
+[IO.File]::WriteAllText($badState, '{"phase":"Bogus","gamePid":42}')
+$s2 = Read-MgState -Path $badState
+if ($s2.phase -eq 'Idle' -and ($null -eq $s2.gamePid)) { Good 'state: unknown phase -> defaults (not trusted)' } else { Bad "state: unknown phase accepted (phase=$($s2.phase) pid=$($s2.gamePid))" }
+[IO.File]::WriteAllText($badState, '{"phase":"InGame","gamePid":4242,"gamePath":"C:\\g\\GTA5.exe","applied":true,"lastApplyUtc":"2026-11-27T10:00:00.0000000Z"}')
+$s3 = Read-MgState -Path $badState
+if ($s3.phase -eq 'InGame' -and ([int]$s3.gamePid -eq 4242) -and $s3.gamePath -and $s3.applied) { Good 'state: valid file keeps full takeover evidence (pid, path, applied)' } else { Bad "state: valid file lost fields (phase=$($s3.phase) pid=$($s3.gamePid) path=$($s3.gamePath))" }
+
+# b) kill посреди записи: недописанный tmp не может стать целью и не остаётся мусором
+$at = Join-Path $sandbox 'atomic_target.xml'
+[IO.File]::WriteAllText($at, 'OLD-CONTENT')
+[IO.File]::WriteAllText("$at.$PID.mgtmp", 'HALF-WRITTEN')
+$wr = Write-Atomic -Path $at -Bytes ([Text.Encoding]::UTF8.GetBytes('NEW-CONTENT'))
+$leftTmp = @(Get-ChildItem $sandbox -Filter '*.mgtmp' -ErrorAction SilentlyContinue).Count
+if ($wr -and ([IO.File]::ReadAllText($at) -eq 'NEW-CONTENT') -and ($leftTmp -eq 0)) { Good 'atomic: stale tmp from a killed write is replaced, no leftovers' } else { Bad "atomic: ok=$wr content=$([IO.File]::ReadAllText($at)) tmp=$leftTmp" }
+
+# c) перезапуск игры внутри окна охраны: окно отсчитывается от НОВОГО sessionStart
+if ((Test-GuardActive (Get-Date).ToUniversalTime() 120 $true $true) -and
+    (-not (Test-GuardActive (Get-Date).ToUniversalTime().AddSeconds(-200) 120 $true $true))) { Good 'guard: a relaunched game re-arms the window from its own start' } else { Bad 'guard: relaunch does not re-arm the window' }
 
 Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 if ($fail) { Write-Host ''; Write-Host 'ERRORS FOUND - do not commit.' -ForegroundColor Red; exit 1 }

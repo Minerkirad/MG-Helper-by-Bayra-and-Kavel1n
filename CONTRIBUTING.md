@@ -12,6 +12,14 @@ ALL GREEN или коммит не уезжает. Харнесс проверя
 дубли функций, атомарные записи, golden-валидацию, adopt-матрицу, .bin-страховку,
 снапшот round-trip, версии (common.ps1 == version.json), BOM, состав деплоя.
 
+## Контракт поведения
+Поведение 2.6.1 заморожено в `_analysis\CONTRACT-2.6.1.md` (вне пакета, в
+рабочей копии разработки). Менять политику `allowAdopt` / `guardWindowSec` /
+формат `watcher.health.json` / имена событий — только вместе с контрактом и
+документацией (`docs/architecture.md`, `docs/errors.md`, `CHANGELOG.md`).
+Порядок перехода на 3.0 и правило «новый компонент становится основным только
+после зелёного parity» — в [docs/ROADMAP-3.0.md](docs/ROADMAP-3.0.md).
+
 ## Правила
 - PS 5.1-совместимость: `[IO.File]::Replace` — только с `[NullString]::Value`;
   `Split-Path -LiteralPath` не сочетать с `-Parent`/`-Leaf` (ambiguous set);

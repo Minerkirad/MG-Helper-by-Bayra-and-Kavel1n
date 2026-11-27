@@ -3,6 +3,114 @@
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.6.1] - 2026-11-27
+### Fixed
+- Adopt is opt-in: `allowAdopt` (default `false`) is the only switch, `onExit`
+  no longer enables it. Cause: with `onExit=adopt` any write that arrived after
+  the guard window was adopted as the new golden - one launcher overwrite
+  silently replaced the settings the protection was meant to keep, and the loss
+  was irreversible (the old golden survived only as `.old_*`/`.bak`).
+- Time is compared in UTC: `lastApplyUtc` and `sessionStart` go through
+  `ConvertTo-UtcTime` before any comparison. Cause: a timestamp read back from
+  `state.json` came back as Local, so after a watcher restart (takeover) "the
+  file changed after us" was always false - adopt never fired and the player's
+  in-game edits were rolled back with the line "nobody wrote after our apply".
+- A new game session is declared only when the recorded game PID is really gone;
+  the process pick is deterministic (sorted by Id). Cause: Majestic starts the
+  game from its own `backup` folder, two processes matched the pattern and
+  `Select-Object -First 1` was non-deterministic - up to six false "new session"
+  events per session re-snapshotted MG and re-applied the golden mid-game.
+- Drift-guard covers the whole session by default (`guardWindowSec: 0`). Cause:
+  guarding only the first 120 s moved the hole to the end of the session - a
+  write after 120 s was neither rolled back nor distinguishable from a user edit.
+  A finite window stays available, but its expiry is now logged and emitted as
+  `guard.window_expired` instead of passing silently.
+- Guard rollback obeys the same pre-apply backup precondition as the launch
+  branch (MG-CR-006). Cause: the in-session branch called `Apply-Golden` without
+  `$preBackupOk` and without refreshing `settings.before_apply.bak`, so a
+  rollback could overwrite the file with no recoverable copy of the user's
+  settings.
+- SAFE MODE on a golden-key mismatch is no longer one-way: the mismatch emits
+  `session.unknown` (+ `golden.mismatch`) and is visible in the tray, an adopted
+  golden refreshes `golden_key.json`, and menu [11] restarts the watcher so the
+  new key is picked up immediately. Cause: the flag was set and never cleared
+  while the protection stayed off, and nothing told the user that.
+- MG snapshot restore works again: `$flat` is defined and each file's source root
+  comes from the generation manifest (`roots.json`). Cause: the reader lost the
+  variable when the snapshot writer moved into `common.ps1`, so the filter
+  degenerated to `__*.json` and matched 0 of 22 files - menu [7] and the tray
+  action always printed "no files for the current MG folder" and exited 1.
+- Apply and adopt are visible: `golden.applied` (`launch`/`reapply`/`guard`/
+  `exit-restore`), `adopt.accepted`, `apply.failed`, `session.start`,
+  `session.end`, `session.unknown`, `guard.window_expired`. Cause: the tray
+  balloon handlers were wired to events emitted only by the beta C# core, so in
+  the default configuration `events.jsonl` had no record of a single successful
+  apply, and a failed apply was logged by nothing at all.
+- Tray status comes from `watcher.health.json` plus heartbeat age (Healthy /
+  Degraded / Stopped / Unknown, plus SAFE MODE) instead of "`watcher.ready`
+  exists or any powershell window is alive". Cause: the old rule showed green
+  exactly when there was no protection (`UnknownSession`, golden mismatch, or a
+  dead watcher whose ready marker stayed behind).
+- Broad `Unblock-File` is gone from the menu entry point; only the installer
+  unblocks package files with runnable extensions (`.ps1`/`.bat`/`.cs`) and
+  reports how many it touched (MG3-007). Cause: the entry point stripped
+  Mark-of-the-Web from every file of the folder on every start of the menu.
+- Watcher stop is no longer a single point of failure: if the named event
+  `Local\MG_Helper_Stop` cannot be opened, the menu writes a `stop.request` flag
+  and the watcher consumes it on the next tick; a stale flag is removed at start.
+  Cause: on a real machine the event could not be opened at all
+  (`MG-E-0105`), so `Restart-Watcher` after [2]/[11] only warned "not guaranteed"
+  and the watcher kept running with an outdated golden/key.
+- The 2.6.x config is actually migrated: `cfgVersion` defaults to 3 and a config
+  without the key is treated as legacy (0), plus a repair branch for configs the
+  first 2.6.1 build stamped `cfgVersion: 2` without migrating. Cause: the gate
+  compared the in-memory default (2) with itself, so `guardWindowSec: 120` and
+  `onExit: adopt` survived the upgrade and the whole-session guard never became
+  active on updated installs.
+
+### Changed
+- New `watcher.health.json` (MG3-002): atomic write (tmp + replace), UTF-8
+  without BOM, one flat JSON object, refreshed every 5 s and on every phase
+  change; `status` is `starting`/`running`/`stopping`. Consumers: the tray and
+  `diagnose.ps1`, both through `Get-WatcherHealth` (fresh <= 15 s, stale 15-30 s,
+  dead > 30 s or no file). A corrupt file is Unknown, never Healthy. `watcher.ready`
+  stays as the installer handshake and is removed after `status=stopping`.
+- Config defaults: `allowAdopt: false`, `onExit: 'restore'`, `guardWindowSec: 0`;
+  `cfgVersion: 3` marks the one-time migration of the values 2.5/2.6 installers
+  wrote (`onExit: "adopt"`, `guardWindowSec: 120`), so an existing `config.json`
+  keeps working and gets the v1 policy without manual edits. Once the config is
+  at version 3 its values are never touched again - that is a user choice.
+- Self-heal chain narrowed: `Get-ValidGolden` heals only from
+  `settings.golden.xml` / `.bak`; live `settings.xml` and
+  `settings.before_apply.bak` are reachable only with `-AllowLiveFallback`
+  (kept for deliberate recovery; the installer makes its own explicit choice).
+  Cause: a torn golden used to be "healed" with whatever the
+  launcher had just written, including inside a guard rollback.
+- Golden/apply decisions documented and covered: `Test-AdoptCandidate` now takes
+  `$AllowAdopt` as its second parameter instead of `$OnExitAdopt`.
+- Fault-injection coverage in `tools\check.ps1`: a torn or foreign `state.json`
+  falls back to defaults (and therefore to SAFE MODE, never to a trusted session),
+  a stale `<target>.<pid>.mgtmp` from a killed write cannot become the target,
+  and a relaunched game re-arms the guard window from its own start.
+- Docs: README, `docs/architecture.md` and `docs/errors.md` describe the 2.6.1
+  behaviour; new `docs/ROADMAP-3.0.md` maps stages A-E of the 3.0 review onto
+  this repository.
+
+### Deprecated
+- `onExit`: ignored for adopt. Set `"allowAdopt": true` instead; the watcher logs
+  a deprecation line when it finds `onExit: "adopt"`.
+
+## [2.5.0-beta.1] - 2026-11-20
+### Added (ROADMAP phase 3 - strangler step 1, BETA)
+- MGCore.cs: minimal C# core (net48, ~21 KB exe) - state machine, golden
+  apply/adopt, drift-guard window, .bin insurance with .incomplete markers,
+  journal reconciliation, events/state/ready formats fully compatible with
+  the PS tooling. Selected by config "coreMode": "csharp" (default 'ps');
+  installer compiles it, smoke-runs it and switches the task action; any
+  failure falls back to the PS watcher. Known beta limits: process detection
+  by name only, GPU golden-key check stays on the PS core.
+- Pre-release: install only if you want to test the compiled core.
+
 ## [2.3.0] - 2026-11-20
 ### Added (ROADMAP 5.3/5.4/6)
 - Diff-preview everywhere: reset/import/profiles/custom-profile show

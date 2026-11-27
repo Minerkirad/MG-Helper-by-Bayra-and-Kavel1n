@@ -1,0 +1,16 @@
+# MG Helper package - transient files only.
+# NOTE: .gitattributes from upstream is kept: *.ps1/*.bat/*.cs are CRLF, *.yml is LF.
+# The installer deploys package files byte-for-byte, so do not change line endings.
+
+# reports/logs are written into the live folder (%LOCALAPPDATA%\MG_Helper), never here
+report_*.txt
+*.log
+
+# leftover of an interrupted atomic write
+*.mgtmp
+
+# OS / editor noise
+Thumbs.db
+desktop.ini
+*.swp
+*~
