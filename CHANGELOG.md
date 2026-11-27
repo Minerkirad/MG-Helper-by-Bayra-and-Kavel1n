@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 3 (PS core module): the eight pure decisions (adopt matrix, guard window,
+  golden-key match, UTC conversion, state read/defaults, policy migration, settings key
+  parsing) moved out of common.ps1 into `MgHelper.Core.ps1`, which common.ps1 dot-sources.
+  One source of truth for the PS implementation and the C# core that will replace it;
+  the module is in the installer deploy list and the suite asserts it is defined there,
+  not duplicated in common.ps1, loaded by dot-source and shipped by the installer.
+  Suite: 95 checks, ALL GREEN.
 - 3.0 stage 1 (testability): `MG_HELPER_DIR` redirects every piece of watcher state
   to a sandbox (default path unchanged, and in that mode the single-instance mutex
   and the stop event use a separate test namespace), and `tools\integration.ps1`

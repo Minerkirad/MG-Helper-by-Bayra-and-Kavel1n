@@ -135,8 +135,8 @@ DoD: все файлы состояния покрыты схемами; миг�
 
 ### Этап 3. Core из PS (M) — «эталон поведения»
 
-1. `MG3-028` Вынести чистые решения в `src\MgHelper.Core\` (PS-модуль
-   `MgHelper.Core.psm1` + манифест): `Test-AdoptCandidate`, `Test-GuardActive`,
+1. `MG3-028` Вынести чистые решения в `MgHelper.Core.ps1` (PS-модуль
+   `MgHelper.Core.ps1` + манифест): `Test-AdoptCandidate`, `Test-GuardActive`,
    `Test-SameSettings`, `Get-XmlSignature`, `Test-GoldenKeyMatchPure`,
    `ConvertTo-UtcTime`, `Read-MgState`, `Get-DefaultState`, policy-миграция.
 2. `MG3-029` `common.ps1` подключает модуль (dot-source) и не дублирует тела
@@ -283,7 +283,8 @@ DoD: чек-лист §9 полностью; старый PS-watcher удалё�
 | 0. База (контракты, parity, релиз, бэкапы) | **закрыт в 2.6.1** |
 | 1. Testability | **закрыт** (MG3-021…023): `MG_HELPER_DIR`, `tools\integration.ps1`, 20 интеграционных проверок в `check.ps1` |
 | 2. Контракты+/ADR | **закрыт**: 7 схем (+config/golden_key/profiles/journal), 5 ADR, событийный уровень parity (`expected-events.json`) |
-| 3. PS core модуль | следующий |
-| 4–7 | не начаты |
+| 3. PS core модуль | **закрыт**: `MgHelper.Core.ps1` (8 чистых решений), dot-source из common.ps1, деплой, parity через модуль |
+| 4. C# ядро | следующий |
+| 5–7 | не начаты |
 
 Обновлять таблицу в том же коммите, в котором закрывается этап.

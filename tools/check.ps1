@@ -654,6 +654,20 @@ foreach ($evName in 'golden\.applied', 'adopt\.accepted', 'apply\.failed', 'sess
 }
 if ($w26 -notmatch 'Update-Health') { Bad 'watcher 2.6.1: watcher.health.json is never written from the loop' }
 if ($w26 -notmatch 'ConvertTo-UtcTime') { Bad 'watcher 2.6.1: state.json timestamps are not normalised to UTC' }
+# 3.0/этап 3: чистые решения живут в модуле, а не в common.ps1
+$corePath = Join-Path $repo 'MgHelper.Core.ps1'
+if (-not (Test-Path -LiteralPath $corePath)) { Bad 'core: MgHelper.Core.ps1 missing from the package' }
+else {
+    $coreTxt = Get-Content $corePath -Raw
+    $coreFns = @('Test-AdoptCandidate', 'Test-GuardActive', 'Test-GoldenKeyMatchPure', 'ConvertTo-UtcTime', 'Read-MgState', 'Get-DefaultState', 'Update-MgConfigPolicy', 'Get-SettingsKeyValues')
+    $missing = @($coreFns | Where-Object { $coreTxt -notmatch ('(?m)^function\s+' + [regex]::Escape($_) + '\s*\{') })
+    if ($missing.Count -eq 0) { Good 'core: all pure decisions are defined in MgHelper.Core.ps1' } else { Bad ("core: missing from the module - " + ($missing -join ', ')) }
+    $dup = @($coreFns | Where-Object { $ctxt -match ('(?m)^function\s+' + [regex]::Escape($_) + '\s*\{') })
+    if ($dup.Count -eq 0) { Good 'core: common.ps1 no longer duplicates the pure decisions' } else { Bad ("core: still defined in common.ps1 - " + ($dup -join ', ')) }
+    $loaderTxt = Get-Content (Join-Path $repo 'common.ps1') -Raw
+    if ($loaderTxt -match 'CoreModule' -and $loaderTxt -match '\.\s+\$script:CoreModule') { Good 'core: common.ps1 loads the core module by dot-source' } else { Bad 'core: common.ps1 does not dot-source MgHelper.Core.ps1' }
+    if ($instTxt5 -match 'MgHelper\.Core\.ps1') { Good 'core: the module is in the installer deploy list' } else { Bad 'core: installer does not deploy MgHelper.Core.ps1' }
+}
 if ($w26 -notmatch 'guardBakOk') { Bad 'watcher 2.6.1: guard rollback does not require a recovery copy (MG-CR-006 bypass is back)' }
 # 2.6.1: остановка watcher'а не должна зависеть только от именованного события -
 # на живой машине OpenExisting('Local\MG_Helper_Stop') не находил объект
