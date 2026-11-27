@@ -686,9 +686,30 @@ function Get-MgLiveStatus {
 function Test-InstallDowngrade {
     param([string]$LiveVersion, [string]$PackageVersion)
     if (-not $LiveVersion -or -not $PackageVersion) { return $false }
-    try {
-        return (([version]$LiveVersion).CompareTo([version]$PackageVersion) -gt 0)
-    } catch { return $false }
+    # [version] не умеет предварительные версии (3.1.0-beta.1) - сравнение делаем сами:
+    # цифры сравниваем по числам, наличие суффикса -beta/-rc считает версию НИЖЕ релиза.
+    # Раньше здесь стоял try/catch вокруг [version], и на бете защита от отката молча
+    # отключалась (найдено тестом переносимости).
+    function ConvertTo-VersionParts([string]$text) {
+        $m = [regex]::Match($text.Trim(), '^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:[-+](.*))?$')
+        if (-not $m.Success) { return $null }
+        $parts = @(0, 0, 0, 0)
+        for ($i = 1; $i -le 4; $i++) { if ($m.Groups[$i].Success) { $parts[$i - 1] = [int]$m.Groups[$i].Value } }
+        $pre = if ($m.Groups[5].Success) { $m.Groups[5].Value.Trim() } else { '' }
+        return [pscustomobject]@{ Parts = $parts; Pre = $pre }
+    }
+    $live = ConvertTo-VersionParts $LiveVersion
+    $pkg = ConvertTo-VersionParts $PackageVersion
+    if (-not $live -or -not $pkg) { return $false }
+    for ($i = 0; $i -lt 4; $i++) {
+        if ($live.Parts[$i] -gt $pkg.Parts[$i]) { return $true }
+        if ($live.Parts[$i] -lt $pkg.Parts[$i]) { return $false }
+    }
+    # база совпала: релиз (без суффикса) новее предварительной версии
+    if ($live.Pre -eq $pkg.Pre) { return $false }
+    if ($live.Pre -eq '') { return $true }
+    if ($pkg.Pre -eq '') { return $false }
+    return ([string]::CompareOrdinal($live.Pre, $pkg.Pre) -gt 0)
 }
 # ------------------------------------------------------------
 # Отправка отчётов в Telegram (опция, выключена по умолчанию).

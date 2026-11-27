@@ -71,9 +71,13 @@ public static class MgHelperUi
         AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e) { Trace("Unhandled: " + e.ExceptionObject); if (smoke) { Environment.Exit(5); } };
         Trace("start smoke=" + smoke + " data=" + dataRoot + " ui=" + uiDir);
         bool isFirst;
-        using (Mutex mutex = new Mutex(true, "Local\\MG_Helper_UI", out isFirst))
+        // Диагностические режимы не занимают единственный экземпляр: иначе запущенное
+        // приложение ломает --smoke/--env/--shot (и автотесты). В песочнице имя своё.
+        bool diagnosticRun = smoke || !string.IsNullOrEmpty(shotDir) || (args != null && Array.IndexOf(args, "--env") >= 0);
+        string mutexName = "Local\\MG_Helper_UI" + (Environment.GetEnvironmentVariable("MG_HELPER_DIR") != null ? "_test" : "");
+        using (Mutex mutex = new Mutex(diagnosticRun, mutexName, out isFirst))
         {
-            if (!isFirst) return 0;
+            if (!diagnosticRun && !isFirst) return 0;
             try
             {
                 Application.EnableVisualStyles();
