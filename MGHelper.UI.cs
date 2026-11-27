@@ -60,6 +60,9 @@ public static class MgHelperUi
         uiFallback = envFlag == "1" || !WebView2RuntimePresent();
         int envIdx = args == null ? -1 : Array.IndexOf(args, "--env");
         if (envIdx >= 0) { WriteEnvironmentReport(); return 0; }
+        // нативная финализация установки: установщик вызывает exe, а не PowerShell
+        int finIdx = args == null ? -1 : Array.IndexOf(args, "--install-finalize");
+        if (finIdx >= 0) { return InstallFinalize(); }
         if (!Directory.Exists(uiDir))
         {
             string nested = Path.Combine(appDir, "App");
@@ -562,7 +565,7 @@ public static class MgHelperUi
             sb.Append("\"ui\":{\"config\":{\"allowAdopt\":").Append(Get(cfg, "allowAdopt") == "true" ? "true" : "false");
             sb.Append(",\"sessionGuard\":").Append(Get(cfg, "sessionGuard") == "false" ? "false" : "true");
             sb.Append(",\"guardWindowSec\":").Append(Digits(Get(cfg, "guardWindowSec")));
-            sb.Append("},\"autoSend\":").Append(Get(cfg, "autoSendReports") == "true" ? "true" : "false");
+            sb.Append("},\"autoSend\":").Append(Get(cfg, "autoSendReports") == "false" ? "false" : "true");
             sb.Append(",\"autostart\":").Append(AutostartEnabled() ? "true" : "false").Append("}}");
 
             string script = "window.mg && window.mg.update(" + sb.ToString() + ");";
@@ -790,6 +793,126 @@ public static class MgHelperUi
             }
         }
         catch (Exception ex) { Log("[!] command " + cmd + ": " + ex.Message); Notify("Ошибка: " + ex.Message); }
+    }
+
+    // ---------------- установка (нативный финализатор) ----------------
+    // Установщик вызывает MGHelper.exe --install-finalize: никаких консольных окон и
+    // никакого PowerShell на пути установки (раньше окно PowerShell висело на экране).
+    private static int InstallFinalize()
+    {
+        try
+        {
+            string versionDir = appDir;
+            string versionsDir = Path.GetDirectoryName(versionDir);
+            string installRoot = Path.GetDirectoryName(versionsDir);
+            string data = Environment.GetEnvironmentVariable("MG_HELPER_DIR");
+            bool sandbox = !string.IsNullOrEmpty(data);
+            if (sandbox) data = Path.GetFullPath(data);
+            else data = Path.GetDirectoryName(installRoot);
+
+            string version = UiVersion;
+            string vf = Path.Combine(versionDir, "version.json");
+            if (File.Exists(vf))
+            {
+                Dictionary<string, object> v = ParseFlatJson(ReadText(vf, 0));
+                if (Get(v, "version").Length > 0) version = Get(v, "version");
+            }
+
+            NotifyInstallLine("[*] MG Helper " + version + " (version dir: " + versionDir + ")");
+
+            // 1. остановить старый watcher: флаг + завершение задачи
+            try { File.WriteAllText(Path.Combine(data, "stop.request"), DateTime.UtcNow.ToString("o"), new UTF8Encoding(false)); } catch { }
+            RunHidden("schtasks", "/End /TN MG_Helper_Watcher");
+            Thread.Sleep(1200);
+
+            // 2. указатель версии
+            string currentFile = Path.Combine(installRoot, "current.json");
+            string payload = "{\"version\":\"" + Json(version) + "\",\"path\":\"Versions\\\\" + Json(version) +
+                             "\",\"updated\":\"" + Json(DateTime.UtcNow.ToString("o")) + "\"}";
+            string tmp = currentFile + ".tmp";
+            File.WriteAllText(tmp, payload, new UTF8Encoding(false));
+            if (File.Exists(currentFile)) File.Delete(currentFile);
+            File.Move(tmp, currentFile);
+            NotifyInstallLine("[+] current.json -> " + version);
+
+            // 3. скрипты поддержки в DataRoot
+            string[] tooling = new string[] {
+                "common.ps1", "MgHelper.Core.ps1", "gta-settings-watcher.ps1", "MG-Helper.ps1", "MG-Helper.bat",
+                "diagnose.ps1", "uninstall.ps1", "repair.ps1", "reset-settings.ps1", "import-settings.ps1",
+                "clean-majestic-cache.ps1", "max-fps.ps1", "cut-shadows.ps1", "restore-mg-snapshot.ps1",
+                "restore-golden-history.ps1", "save-custom-profile.ps1", "apply-custom-profile.ps1",
+                "update-helper.ps1", "install-gta-watcher.ps1", "install-3.0.ps1", "install-3.1.ps1"
+            };
+            int copied = 0;
+            foreach (string name in tooling)
+            {
+                string src = Path.Combine(versionDir, name);
+                if (!File.Exists(src)) continue;
+                try { File.Copy(src, Path.Combine(data, name), true); copied++; } catch { }
+            }
+            File.WriteAllText(Path.Combine(data, "version.json"), "{\r\n    \"version\": \"" + Json(version) + "\"\r\n}", new UTF8Encoding(false));
+            NotifyInstallLine("[+] скрипты поддержки обновлены (" + copied + "), данные не тронуты");
+
+            // 4. автозапуск: задача watcher'а + ярлык приложения
+            if (!sandbox)
+            {
+                string watcherExe = Path.Combine(versionDir, "MGHelper.Watcher.exe");
+                if (File.Exists(watcherExe))
+                {
+                    RunHidden("schtasks", "/Create /F /SC MINUTE /MO 10 /TN MG_Helper_Watcher /TR \"" + watcherExe + "\"");
+                    RunHidden("schtasks", "/Run /TN MG_Helper_Watcher");
+                }
+                try
+                {
+                    string startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                    if (!string.IsNullOrEmpty(startup) && Directory.Exists(startup))
+                    {
+                        string appExe = Path.Combine(versionDir, "MGHelper.exe");
+                        string lnk = Path.Combine(startup, "MG Helper.lnk");
+                        Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                        object shell = Activator.CreateInstance(shellType);
+                        object shortcut = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+                        Type sc = shortcut.GetType();
+                        sc.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { appExe });
+                        sc.InvokeMember("WorkingDirectory", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { versionDir });
+                        sc.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { Path.Combine(versionDir, "ui", "assets", "mghelper.ico") });
+                        sc.InvokeMember("Description", System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { "MG Helper - защита настроек GTA V" });
+                        sc.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+                    }
+                }
+                catch (Exception ex) { NotifyInstallLine("[!] ярлык автозапуска: " + ex.Message); }
+            }
+
+            // 5. отчёт об установке
+            string report = "{\"schema\":1,\"to\":\"" + Json(version) + "\",\"at\":\"" + Json(DateTime.UtcNow.ToString("o")) +
+                            "\",\"layout\":{\"installRoot\":\"" + Json(installRoot) + "\",\"dataRoot\":\"" + Json(data) +
+                            "\",\"versionDir\":\"" + Json(versionDir) + "\"},\"dataRootUntouched\":true,\"toolingCopied\":" + copied + "}";
+            File.WriteAllText(Path.Combine(data, "migration-report.json"), report, new UTF8Encoding(false));
+            NotifyInstallLine("[+] установка " + version + " завершена");
+
+            // 6. запустить приложение (если не просили обратное)
+            if (sandbox || (Environment.GetCommandLineArgs() != null && Array.IndexOf(Environment.GetCommandLineArgs(), "--no-start") >= 0))
+            {
+                return 0;
+            }
+            try { Process.Start(Path.Combine(versionDir, "MGHelper.exe")); } catch { }
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            NotifyInstallLine("[!] установка не завершена: " + ex.Message);
+            return 1;
+        }
+    }
+
+    private static void NotifyInstallLine(string text)
+    {
+        try
+        {
+            string logPath = Path.Combine(dataRoot ?? appDir, "install.log");
+            File.AppendAllText(logPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "  " + text + "\r\n", new UTF8Encoding(true));
+        }
+        catch { }
     }
 
     private static void RunHidden(string exe, string args)
