@@ -691,6 +691,30 @@ $ev1 = Test-JsonAgainstSchema -Data $okEvent -Schema $eventsSchema
 if (@($ev1).Count -eq 0) { Good 'contracts: a real events.jsonl line validates against events.schema.json' } else { Bad ("contracts: events line rejected - " + (@($ev1) -join '; ')) }
 $badEvent = ([ordered]@{ ts = (Get-Date).ToString('o'); phase = 'InGame'; event = 'golden.magic' } | ConvertTo-Json -Compress | ConvertFrom-Json)
 if (@(Test-JsonAgainstSchema -Data $badEvent -Schema $eventsSchema).Count -gt 0) { Good 'contracts: an unknown event name is rejected (tray would never show it)' } else { Bad 'contracts: unknown event name passed validation' }
+# d) этап 2: config, golden_key, profiles, journal
+$cfgSchema = Get-ContractSchema 'config'
+$gkSchema = Get-ContractSchema 'golden-key'
+$profSchema = Get-ContractSchema 'profiles'
+$journalSchema = Get-ContractSchema 'journal'
+$cfgObj = (Get-MgConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json)
+$cv = Test-JsonAgainstSchema -Data $cfgObj -Schema $cfgSchema
+if (@($cv).Count -eq 0) { Good 'contracts: a default config validates against config.schema.json' } else { Bad ("contracts: default config rejected - " + (@($cv) -join '; ')) }
+$script:HelperDir = $hm2
+$gkObj = @{ variant = 'GTA V'; gpu = 'NVIDIA GeForce GTX 1660 SUPER'; created = (Get-Date).ToString('o') }
+[IO.File]::WriteAllText((Join-Path $hm2 'golden_key.json'), ($gkObj | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+$gk = Get-Content (Join-Path $hm2 'golden_key.json') -Raw | ConvertFrom-Json
+if (@(Test-JsonAgainstSchema -Data $gk -Schema $gkSchema).Count -eq 0) { Good 'contracts: golden_key.json validates against its schema' } else { Bad 'contracts: golden_key.json rejected' }
+$profObj = @{ profiles = @{ 'my-profile' = @{ values = @{ TextureQuality = '2'; MSAA = '0' }; created = (Get-Date).ToString('o') } } } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+if (@(Test-JsonAgainstSchema -Data $profObj -Schema $profSchema).Count -eq 0) { Good 'contracts: profiles.json validates against its schema' } else { Bad 'contracts: profiles.json rejected' }
+$null = Start-OpJournal 'contract-test'
+$null = Set-OpJournalStep 'contract-test' 'backup' 'done' 'x.bak'
+$null = Complete-OpJournal 'contract-test' 'done'
+$journalObj = Get-Content (Join-Path $hm2 'journal_contract-test.json') -Raw | ConvertFrom-Json
+if (@(Test-JsonAgainstSchema -Data $journalObj -Schema $journalSchema).Count -eq 0) { Good 'contracts: a real journal file validates against journal.schema.json' } else { Bad 'contracts: journal file rejected' }
+$brokenJournal = Get-Content (Join-Path $hm2 'journal_contract-test.json') -Raw | ConvertFrom-Json
+$brokenJournal.status = 'bogus'
+if (@(Test-JsonAgainstSchema -Data $brokenJournal -Schema $journalSchema).Count -gt 0) { Good 'contracts: an unknown journal status is rejected (reconciliation expects a known one)' } else { Bad 'contracts: unknown journal status passed validation' }
+$script:HelperDir = $oldDir
 
 # 11x. 3.0/пара: parity-раннер. Ожидания лежат данными (tools\parity\expected.json),
 # раннер прогоняет их против текущей реализации; будущее C#-ядро должно пройти те же

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/profiles.schema.json",
+  "title": "profiles.json",
+  "description": "Named graphics profiles saved from the golden (menu [14]/[15]). values is a flat map of settings key -> value; applying a profile writes those keys over the golden. Unknown keys are ignored on read, so additive formats are safe.",
+  "type": "object",
+  "required": ["profiles"],
+  "properties": {
+    "profiles": {
+      "type": "object",
+      "description": "Profile name -> profile body. Names are user supplied (validated when saving).",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["values", "created"],
+        "properties": {
+          "values": {
+            "type": "object",
+            "description": "settings.xml key -> value, e.g. {\"TextureQuality\":\"2\",\"MSAA\":\"0\"}."
+          },
+          "created": { "type": "string", "description": "ISO timestamp of the save." }
+        }
+      }
+    }
+  }
+}

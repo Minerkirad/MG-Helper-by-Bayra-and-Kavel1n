@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/config.schema.json",
+  "title": "config.json",
+  "description": "User configuration. Additive fields are allowed (readers ignore what they do not know); removing or changing the meaning of a field needs a cfgVersion bump plus a migration in Update-MgConfigPolicy. Values that 2.5/2.6 installers wrote as defaults (onExit=adopt, guardWindowSec=120) are migrated once - see cfgVersion.",
+  "type": "object",
+  "required": ["settingsXml"],
+  "properties": {
+    "version": { "type": "integer", "description": "Legacy format marker, kept for old builds." },
+    "cfgVersion": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Policy version. Absent/0 = legacy 2.5/2.6 config; 2 = first 2.6.1 build (repaired); >=3 = migrated, values are a user decision and are never overwritten."
+    },
+    "settingsXml": { "type": "string", "description": "Path to the game's settings.xml." },
+    "miamiGraphicsDir": { "type": "string", "description": "Miami Graphics folder; empty when not installed." },
+    "majesticJson": { "type": "string", "description": "Path to the Majestic launcher config (cache path source)." },
+    "lastFullDiscovery": { "type": "string", "description": "ISO timestamp of the last full path rediscovery (older than 24 h triggers a new one)." },
+    "gameProcesses": { "type": "array", "items": { "type": "string" }, "description": "Process name patterns that mean 'the game is running'." },
+    "launcherProcesses": { "type": "array", "items": { "type": "string" }, "description": "Launcher patterns (used for the .bin insurance and the tray)." },
+    "mgProcesses": { "type": "array", "items": { "type": "string" }, "description": "Miami Graphics installer patterns." },
+    "autoCleanDlccache": { "type": "boolean", "description": "Opt-in: archive dlccache .dat files on launch." },
+    "autoUpdate": { "type": "boolean", "description": "Opt-in: silent update when idle." },
+    "onExit": { "enum": ["restore", "adopt"], "description": "Deprecated. Does NOT enable adopt any more (2.6.1); use allowAdopt." },
+    "allowAdopt": { "type": "boolean", "description": "Opt-in: in-game edits become the new golden on exit. Default false - the golden is restored instead." },
+    "sessionGuard": { "type": "boolean", "description": "Kill-switch for the in-session drift guard." },
+    "guardWindowSec": { "type": "integer", "minimum": 0, "description": "0 = guard the whole session (default); >0 = only the first N seconds after the game starts." },
+    "docsRoot": { "type": "string", "description": "Pinned Documents location; a change breaks the Rockstar SDK (error 1002) and is reported by diagnose." }
+  }
+}

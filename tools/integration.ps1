@@ -106,6 +106,31 @@ try {
     $h2 = Get-Content (Join-Path $sandbox 'watcher.health.json') -Raw | ConvertFrom-Json
     Check ($h2.status -eq 'stopping') "health.status = stopping after a clean exit (got '$($h2.status)')"
     Check (-not (Test-Path -LiteralPath (Join-Path $sandbox 'watcher.ready'))) 'watcher.ready removed on exit'
+
+    # --- уровень событий: последовательность из tools\parity\expected-events.json ---
+    $specPath = Join-Path $repo 'tools\parity\expected-events.json'
+    if (Test-Path -LiteralPath $specPath) {
+        $spec = Get-Content -LiteralPath $specPath -Raw | ConvertFrom-Json
+        $evs = @(Get-Content (Join-Path $sandbox 'events.jsonl') -ErrorAction SilentlyContinue |
+                 ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } | Where-Object { $_ })
+        $idx = -1; $seqOk = $true; $why = ''
+        foreach ($want in @($spec.sequence)) {
+            $found = -1
+            for ($i = $idx + 1; $i -lt $evs.Count; $i++) { if ($evs[$i].event -eq $want.event) { $found = $i; break } }
+            if ($found -lt 0) { $seqOk = $false; $why = "missing '$($want.event)' after position $idx"; break }
+            $data = [string]$evs[$found].data
+            if ($want.dataMode -eq 'prefix') {
+                if (-not $data.StartsWith([string]$want.data)) { $seqOk = $false; $why = "'$($want.event)' data '$data' does not start with '$($want.data)'"; break }
+            } elseif ($null -ne $want.data -and $data -ne [string]$want.data) {
+                $seqOk = $false; $why = "'$($want.event)' data '$data' != '$($want.data)'"; break
+            }
+            $idx = $found
+        }
+        Check $seqOk ("events: the sequence matches expected-events.json" + $(if ($seqOk) { '' } else { " ($why)" }))
+        $forbidden = @($spec.forbid)
+        $bad = @($evs | Where-Object { $forbidden -contains $_.event })
+        Check ($bad.Count -eq 0) ("events: none of the forbidden events in a clean run" + $(if ($bad.Count) { " (got: " + (($bad | ForEach-Object { $_.event }) -join ', ') + ")" } else { '' }))
+    }
 }
 catch {
     Check $false ("integration crashed: " + $_.Exception.Message)

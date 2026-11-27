@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to MG Helper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/).

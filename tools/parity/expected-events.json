@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "note": "Sequence of events a normal run must emit, in order. Used by tools/integration.ps1 against the real sandbox watcher and, later, against the C# watcher. 'data' is compared exactly unless 'dataMode' is 'prefix' (then the value must start with it, e.g. 'version=' or 'pid='). Events not listed here (auto-update.start, insurance.*, guard.* for a healthy run) are allowed but not required, except 'forbid' which must never appear in a clean run.",
+  "sequence": [
+    { "event": "watcher.start", "data": "version=", "dataMode": "prefix" },
+    { "event": "watcher.ready", "data": "version=", "dataMode": "prefix" },
+    { "event": "golden.applied", "data": "launch" },
+    { "event": "session.start", "data": "pid=", "dataMode": "prefix" },
+    { "event": "session.end", "data": "game closed" },
+    { "event": "watcher.stop", "data": "version=", "dataMode": "prefix" }
+  ],
+  "forbid": ["error", "apply.failed", "guard.rollback", "session.unknown", "golden.mismatch"]
+}

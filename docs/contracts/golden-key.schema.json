@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/golden-key.schema.json",
+  "title": "golden_key.json",
+  "description": "Machine identity the golden belongs to (MG3 / ROADMAP 2.3). A mismatch means the golden was made on another game variant or GPU: the watcher refuses to apply or adopt and shows SAFE MODE. A missing key is treated conservatively as a match (legacy install).",
+  "type": "object",
+  "required": ["variant", "gpu"],
+  "properties": {
+    "variant": { "type": "string", "description": "'GTA V' or 'GTA V Enhanced' - detected from the install path." },
+    "gpu": { "type": "string", "description": "VideoCardDescription from the golden settings." },
+    "created": { "type": "string", "description": "ISO timestamp of when the key was recorded." }
+  }
+}

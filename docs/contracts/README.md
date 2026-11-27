@@ -9,6 +9,12 @@
 | [state.schema.json](state.schema.json) | `state.json` — состояние сессии watcher'а | `gta-settings-watcher.ps1` (`Save-State`) | watcher при старте (`Read-MgState`), трей (legacy fallback) |
 | [health.schema.json](health.schema.json) | `watcher.health.json` — heartbeat | `Write-WatcherHealth` (common.ps1) | трей, `diagnose.ps1` (`Get-WatcherHealth`) |
 | [events.schema.json](events.schema.json) | одна строка `events.jsonl` | `Ev` в watcher'е | трей (баллуны, SAFE MODE), диагностика |
+| [config.schema.json](config.schema.json) | `config.json` — политика и пути | установщик, `Save-MgConfig`, `Update-MgConfigPolicy` | все компоненты (`Get-MgConfig`) |
+| [golden-key.schema.json](golden-key.schema.json) | `golden_key.json` — идентичность машины для эталона | `Save-GoldenKey` | watcher (`Test-GoldenKeyCurrent`), трей (SAFE MODE) |
+| [profiles.schema.json](profiles.schema.json) | `profiles.json` — именованные профили графики | `save-custom-profile.ps1` | `apply-custom-profile.ps1` |
+| [journal.schema.json](journal.schema.json) | `journal_<op>.json` — журнал многошаговых операций | `Start/Set/Complete-OpJournal` | `Invoke-OpReconciliation` при старте watcher'а |
+
+Архитектурные решения — в `docs\adr\` (ADR-001 язык ядра, ADR-002 InstallRoot/DataRoot, ADR-003 Named Pipe IPC, ADR-004 UI, ADR-005 судьба PS-watcher'а).
 
 ## Правила версионирования
 

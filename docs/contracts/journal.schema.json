@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/docs/contracts/journal.schema.json",
+  "title": "journal_<op>.json",
+  "description": "Operation journal for multi-file changes (reset, profile apply, import). A file left in status 'running' means the process died mid-operation: Invoke-OpReconciliation restores the golden from the recorded backup at the next start. 'recovered' is written after such a rollback.",
+  "type": "object",
+  "required": ["op", "status", "started", "steps"],
+  "properties": {
+    "op": { "type": "string", "description": "Operation name, also part of the file name (journal_<op>.json)." },
+    "status": { "enum": ["running", "done", "failed", "cancelled", "no-changes", "recovered"], "description": "Lifecycle. Only 'running' triggers reconciliation." },
+    "started": { "type": "string", "description": "ISO timestamp when the operation started." },
+    "steps": {
+      "type": "array",
+      "description": "Ordered steps with their outcome; path points at the file the step produced or backed up.",
+      "items": {
+        "type": "object",
+        "required": ["step", "status"],
+        "properties": {
+          "step": { "type": "string", "description": "Step name, e.g. backup / write-golden / verify." },
+          "status": { "type": "string", "description": "done / failed / skipped." },
+          "path": { "type": "string", "description": "File this step wrote or backed up (may be empty)." }
+        }
+      }
+    }
+  }
+}
