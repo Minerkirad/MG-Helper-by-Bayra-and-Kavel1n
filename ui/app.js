@@ -133,6 +133,53 @@
         });
     }
 
+    /* ---------- тосты и подтверждения ---------- */
+    function toast(message, kind) {
+        var box = $('toasts');
+        if (!box) { return; }
+        var el = document.createElement('div');
+        el.className = 'toast' + (kind ? ' ' + kind : '');
+        el.textContent = message;
+        box.appendChild(el);
+        setTimeout(function () { if (el.parentNode) { el.parentNode.removeChild(el); } }, 4200);
+    }
+
+    var modalResolve = null;
+    function confirmDialog(title, text, okLabel) {
+        var back = $('modalBackdrop');
+        if (!back) { return Promise.resolve(true); }
+        $('modalTitle').textContent = title;
+        $('modalText').textContent = text;
+        var ok = $('modalOk');
+        ok.textContent = okLabel || 'Подтвердить';
+        back.hidden = false;
+        ok.focus();
+        return new Promise(function (resolve) {
+            modalResolve = function (value) {
+                back.hidden = true;
+                modalResolve = null;
+                resolve(value);
+            };
+        });
+    }
+
+    function wireModal() {
+        var ok = $('modalOk'), cancel = $('modalCancel'), back = $('modalBackdrop');
+        if (!ok || !cancel || !back) { return; }
+        ok.addEventListener('click', function () { if (modalResolve) { modalResolve(true); } });
+        cancel.addEventListener('click', function () { if (modalResolve) { modalResolve(false); } });
+        back.addEventListener('click', function (e) { if (e.target === back && modalResolve) { modalResolve(false); } });
+        document.addEventListener('keydown', function (e) {
+            if (!back.hidden && e.key === 'Escape' && modalResolve) { modalResolve(false); }
+        });
+    }
+
+    var DESTRUCTIVE = {
+        'new-golden': ['Сделать текущие настройки эталоном?', 'Прежний эталон уйдёт в резервную копию. Дальше защита будет восстанавливать именно эти настройки.', 'Сделать эталоном'],
+        'reset-settings': ['Вернуть настройки игры к эталону?', 'Файлы настроек игры будут перезаписаны эталоном. Копия до записи сохраняется.', 'Сбросить'],
+        'restore-mg': ['Восстановить конфиги Miami Graphics?', 'Файлы MG будут заменены снапшотом. Перед записью создаётся резервная копия.', 'Восстановить']
+    };
+
     /* ---------- навигация ---------- */
     document.querySelectorAll('.nav-item').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -158,10 +205,26 @@
     document.querySelectorAll('[data-cmd]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var cmd = btn.getAttribute('data-cmd');
-            btn.disabled = true;
-            setTimeout(function () { btn.disabled = false; }, 1200);
-            send(cmd);
+            var run = function () {
+                btn.classList.add('is-busy');
+                send(cmd);
+                setTimeout(function () { btn.classList.remove('is-busy'); }, 2500);
+            };
+            var d = DESTRUCTIVE[cmd];
+            if (d) { confirmDialog(d[0], d[1], d[2]).then(function (ok) { if (ok) { run(); } }); }
+            else { run(); }
         });
+    });
+
+    /* Ctrl+1..5 — разделы */
+    document.addEventListener('keydown', function (e) {
+        if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) { return; }
+        var idx = parseInt(e.key, 10);
+        if (idx >= 1 && idx <= 5) {
+            e.preventDefault();
+            var nav = document.querySelectorAll('.nav-item');
+            if (nav[idx - 1]) { nav[idx - 1].click(); }
+        }
     });
 
     var save = $('saveSettings');
@@ -195,6 +258,7 @@
         },
         status: function (message) {
             text('reportStatus', message);
+            toast(message);
             setTimeout(function () { text('reportStatus', ''); }, 4000);
         }
     };
@@ -207,6 +271,8 @@
             if (data.type === 'status') { window.mg.status(data.text); }
         });
     }
+
+    wireModal();
 
     /* мок-режим для отладки в браузере */
     if (!host) {

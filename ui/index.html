@@ -143,6 +143,19 @@
         </section>
     </main>
 </div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-title" id="modalTitle">Подтверждение</div>
+        <div class="modal-text" id="modalText"></div>
+        <div class="actions">
+            <button class="btn" id="modalCancel">Отмена</button>
+            <button class="btn primary" id="modalOk">Подтвердить</button>
+        </div>
+    </div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

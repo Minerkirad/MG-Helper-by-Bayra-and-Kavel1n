@@ -171,3 +171,36 @@ input[type="number"] {
     border-radius: 8px; padding: 7px 9px;
 }
 .status-line { color: var(--muted); font-size: 12.5px; align-self: center; }
+/* ---------- тосты ---------- */
+.toasts { position: fixed; right: 18px; bottom: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+.toast {
+    background: var(--bg-elev); border: 1px solid var(--line); color: var(--text);
+    border-left: 3px solid var(--accent); border-radius: 10px; padding: 10px 14px;
+    font-size: 12.5px; box-shadow: var(--shadow); max-width: 420px;
+    animation: toast-in .18s ease-out;
+}
+.toast.warn { border-left-color: var(--warn); }
+.toast.bad { border-left-color: var(--danger); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ---------- модалка ---------- */
+.modal-backdrop {
+    position: fixed; inset: 0; background: rgba(4, 6, 9, 0.62);
+    display: flex; align-items: center; justify-content: center; z-index: 60;
+}
+.modal-backdrop[hidden] { display: none; }
+.modal {
+    background: var(--bg-elev); border: 1px solid var(--line); border-radius: 16px;
+    padding: 22px; width: min(440px, 90vw); box-shadow: var(--shadow);
+}
+.modal-title { font-size: 16px; font-weight: 600; }
+.modal-text { color: var(--muted); font-size: 13px; margin-top: 8px; line-height: 1.45; }
+
+/* ---------- занятость кнопки ---------- */
+.btn.is-busy { opacity: .62; cursor: progress; position: relative; }
+.btn.is-busy::after {
+    content: ""; width: 12px; height: 12px; margin-left: 8px; display: inline-block;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+    animation: spin .7s linear infinite; vertical-align: -2px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
