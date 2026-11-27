@@ -65,7 +65,7 @@ public static class MgCoreProgram
     }
 }
 
-internal static class MgJson
+public static class MgJson
 {
     public static Dictionary<string, object> ReadObject(string path)
     {
@@ -185,7 +185,7 @@ internal static class MgJson
     }
 }
 
-internal static class MgDecisions
+public static class MgDecisions
 {
     public static Dictionary<string, object> Run(Dictionary<string, object> request)
     {

@@ -72,7 +72,7 @@ $deploy = @(
     'import-settings.ps1', 'clean-majestic-cache.ps1', 'max-fps.ps1', 'cut-shadows.ps1',
     'restore-mg-snapshot.ps1', 'restore-golden-history.ps1', 'save-custom-profile.ps1',
     'apply-custom-profile.ps1', 'update-helper.ps1', 'install-gta-watcher.ps1',
-    'MgHelper.Core.ps1', 'CoreDecisions.cs', 'HelperPipe.cs', 'MG-Helper-Host.cs', 'MG-Helper-Tray.cs', 'MGCore.cs', 'version.json'
+    'MgHelper.Core.ps1', 'CoreDecisions.cs', 'HelperPipe.cs', 'MGHelper.Watcher.cs', 'MG-Helper-Host.cs', 'MG-Helper-Tray.cs', 'MGCore.cs', 'version.json'
 )
 $utf8bom = [Text.UTF8Encoding]::new($true)
 # MG-CR-019: staged deployment - everything is copied into a staging folder,

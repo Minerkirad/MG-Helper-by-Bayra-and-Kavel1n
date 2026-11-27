@@ -773,6 +773,16 @@ $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.ex
 $intOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration.ps1') -Quiet 2>&1
 if ($LASTEXITCODE -eq 0) { Good 'integration: the real watcher loop starts, plays a session, exits on stop.request' }
 else { Bad ("integration: runner failed - " + (($intOut | Select-Object -Last 3) -join ' | ')) }
+$intCoreOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-core.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'integration: the C# watcher runs the same session (launch, rollback, exit, pipe) in a sandbox' }
+else { Bad ("integration: C# watcher failed - " + (($intCoreOut | Select-Object -Last 3) -join ' | ')) }
+$watcherCs = Join-Path $repo 'MGHelper.Watcher.cs'
+if (-not (Test-Path -LiteralPath $watcherCs)) { Bad 'watcher: MGHelper.Watcher.cs missing' }
+else {
+    $wCs = Get-Content $watcherCs -Raw
+    if ($wCs -match 'MgDecisions\.Run') { Good 'watcher: the C# watcher takes every decision from the C# core' } else { Bad 'watcher: MGHelper.Watcher.cs does not use MgDecisions' }
+    if ($instTxt5 -match 'MGHelper\.Watcher\.cs') { Good 'watcher: MGHelper.Watcher.cs is in the installer deploy list' } else { Bad 'watcher: installer does not ship MGHelper.Watcher.cs' }
+}
 
 # 11u. Fault-injection (этап A ревью 3.0): сценарии, которые раньше не покрывались
 # a) битый/чужой state.json при живой игре -> defaults, watcher не падает,

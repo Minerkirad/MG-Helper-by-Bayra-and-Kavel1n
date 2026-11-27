@@ -5,6 +5,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- 3.0 stage 5b (C# watcher): MGHelper.Watcher.exe runs the same loop as the PS
+  watcher - process detection, apply on launch, in-session guard rollback, adopt/restore
+  on exit, SAFE MODE on a golden-key mismatch, health every 5 s, events.jsonl, log,
+  stop/reload/apply request files and the Named Pipe from HelperPipe.cs. Every decision
+  goes through MgDecisions (the parity-tested C# core); I/O and state stay in the process.
+  tools/build-core.ps1 builds MgCore.exe, MgCore.dll and MGHelper.Watcher.exe with the
+  same Add-Type path as the host/tray; tools/integration-core.ps1 drives the C# watcher
+  through a full sandbox session (launch, guard rollback, exit, pipe commands) with 21
+  assertions, wired into the suite: 107 checks, ALL GREEN in ~50 s.
 - Downgrade protection: the installer refuses to overwrite a live install whose
   version.json is NEWER than the package, unless -Force is passed, and prints where
   the backups are. Added after an old 1.x package silently replaced a working 2.6.1
