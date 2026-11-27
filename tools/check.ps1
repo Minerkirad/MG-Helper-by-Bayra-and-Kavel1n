@@ -692,6 +692,18 @@ if (@($ev1).Count -eq 0) { Good 'contracts: a real events.jsonl line validates a
 $badEvent = ([ordered]@{ ts = (Get-Date).ToString('o'); phase = 'InGame'; event = 'golden.magic' } | ConvertTo-Json -Compress | ConvertFrom-Json)
 if (@(Test-JsonAgainstSchema -Data $badEvent -Schema $eventsSchema).Count -gt 0) { Good 'contracts: an unknown event name is rejected (tray would never show it)' } else { Bad 'contracts: unknown event name passed validation' }
 
+# 11x. 3.0/пара: parity-раннер. Ожидания лежат данными (tools\parity\expected.json),
+# раннер прогоняет их против текущей реализации; будущее C#-ядро должно пройти те же
+# сценарии через -Implementation core.
+. (Join-Path $repo 'tools\parity.ps1')
+$paritySpec = Get-Content (Join-Path $repo 'tools\parity\expected.json') -Raw | ConvertFrom-Json
+$parityCount = @($paritySpec.scenarios).Count
+if ($parityCount -ge 20) { Good "parity: expected.json holds $parityCount scenarios (data, not code)" } else { Bad "parity: only $parityCount scenarios in expected.json" }
+$parityResults = @(Invoke-ParityScenarios -Quiet)
+$parityFailed = @($parityResults | Where-Object { -not $_.ok })
+if ($parityFailed.Count -eq 0) { Good "parity: all $($parityResults.Count) scenarios match expected.json (ps implementation)" }
+else { Bad ("parity: " + $parityFailed.Count + " diverged - " + (($parityFailed | ForEach-Object { "$($_.id): $($_.error)" }) -join ' | ')) }
+
 # 11u. Fault-injection (этап A ревью 3.0): сценарии, которые раньше не покрывались
 # a) битый/чужой state.json при живой игре -> defaults, watcher не падает,
 #    а состояние не считается доверенным (дальше он уходит в UnknownSession)

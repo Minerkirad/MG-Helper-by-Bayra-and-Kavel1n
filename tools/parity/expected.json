@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "note": "Parity expectations for the 3.0 strangler step (docs/ROADMAP-3.0.md, section 4). Every scenario is a decision or a file-level effect that BOTH the current PS watcher and the future C# core must reproduce. The runner tool/parity.ps1 executes them against the implementation selected with -Implementation; changing an expectation is a reviewed decision, not a way to make a run green.",
+  "scenarios": [
+    {
+      "id": "guard-default-whole-session",
+      "desc": "Default config (guardWindowSec=0) guards the session 150 s after launch",
+      "kind": "guard",
+      "inputs": { "sessionStartOffsetSec": -150, "windowSec": 0, "guardEnabled": true, "gameRunning": true },
+      "expect": { "active": true }
+    },
+    {
+      "id": "guard-finite-window-expired",
+      "desc": "Explicit 120 s window is over after 150 s (and its expiry is a visible event)",
+      "kind": "guard",
+      "inputs": { "sessionStartOffsetSec": -150, "windowSec": 120, "guardEnabled": true, "gameRunning": true },
+      "expect": { "active": false }
+    },
+    {
+      "id": "guard-inside-window",
+      "desc": "Inside the window the guard is active",
+      "kind": "guard",
+      "inputs": { "sessionStartOffsetSec": -30, "windowSec": 120, "guardEnabled": true, "gameRunning": true },
+      "expect": { "active": true }
+    },
+    {
+      "id": "guard-kill-switch",
+      "desc": "sessionGuard=false disables the guard completely",
+      "kind": "guard",
+      "inputs": { "sessionStartOffsetSec": -30, "windowSec": 0, "guardEnabled": false, "gameRunning": true },
+      "expect": { "active": false }
+    },
+    {
+      "id": "guard-no-session",
+      "desc": "No session (Idle) means no guard",
+      "kind": "guard",
+      "inputs": { "sessionStartOffsetSec": null, "windowSec": 0, "guardEnabled": true, "gameRunning": true },
+      "expect": { "active": false }
+    },
+    {
+      "id": "adopt-allowed-with-optin",
+      "desc": "allowAdopt=true + applied this session + a foreign write after us + differing file -> adopt",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": true, "allowAdopt": true, "same": false, "appliedThisSession": true },
+      "expect": { "adopt": true }
+    },
+    {
+      "id": "adopt-blocked-by-default",
+      "desc": "Default config: the same input is NOT adopted (the golden is restored on exit instead)",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": true, "allowAdopt": false, "same": false, "appliedThisSession": true },
+      "expect": { "adopt": false }
+    },
+    {
+      "id": "adopt-blocked-without-our-apply",
+      "desc": "A session we never applied cannot adopt a foreign file (poisoning guard)",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": true, "allowAdopt": true, "same": false, "appliedThisSession": false },
+      "expect": { "adopt": false }
+    },
+    {
+      "id": "adopt-blocked-unchanged-file",
+      "desc": "An unchanged file is not adopted",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": true, "allowAdopt": true, "same": true, "appliedThisSession": true },
+      "expect": { "adopt": false }
+    },
+    {
+      "id": "adopt-blocked-unreadable-file",
+      "desc": "An unreadable file (tri-state $null) is not adopted",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": true, "allowAdopt": true, "same": null, "appliedThisSession": true },
+      "expect": { "adopt": false }
+    },
+    {
+      "id": "adopt-blocked-without-foreign-write",
+      "desc": "nobody wrote after our apply -> nothing to adopt",
+      "kind": "adopt",
+      "inputs": { "changedAfterUs": false, "allowAdopt": true, "same": false, "appliedThisSession": true },
+      "expect": { "adopt": false }
+    },
+    {
+      "id": "golden-source-only-our-backup",
+      "desc": "Torn golden + valid settings.golden.xml.bak -> heals from our backup",
+      "kind": "golden-source",
+      "inputs": { "goldenValid": false, "goldenBakValid": true, "liveValid": true, "allowLiveFallback": false },
+      "expect": { "source": "golden.bak", "healed": true }
+    },
+    {
+      "id": "golden-source-refuses-live-file",
+      "desc": "Torn golden, no .bak, valid live settings + valid before_apply backup -> NO silent heal",
+      "kind": "golden-source",
+      "inputs": { "goldenValid": false, "goldenBakValid": false, "liveValid": true, "allowLiveFallback": false },
+      "expect": { "source": null, "healed": null }
+    },
+    {
+      "id": "golden-source-live-fallback-on-request",
+      "desc": "Same as above but the caller explicitly allows the live fallback (installer/reset path)",
+      "kind": "golden-source",
+      "inputs": { "goldenValid": false, "goldenBakValid": false, "liveValid": true, "allowLiveFallback": true },
+      "expect": { "source": "before_apply", "healed": true }
+    },
+    {
+      "id": "apply-heals-from-backup",
+      "desc": "Apply-Golden writes the validated backup bytes over the live file and repairs the golden",
+      "kind": "apply",
+      "inputs": { "goldenValid": false, "goldenBakValid": true, "liveTag": "OLD-LIVE" },
+      "expect": { "applied": true, "liveTag": "GOLDEN-BAK" }
+    },
+    {
+      "id": "apply-refuses-foreign-source",
+      "desc": "Apply-Golden must not touch the live file when only foreign files are valid",
+      "kind": "apply",
+      "inputs": { "goldenValid": false, "goldenBakValid": false, "liveTag": "USER-LIVE" },
+      "expect": { "applied": false, "liveTag": "USER-LIVE" }
+    },
+    {
+      "id": "compare-whitespace-and-attribute-order",
+      "desc": "Attribute order and insignificant whitespace do not make settings 'different'",
+      "kind": "compare",
+      "inputs": { "a": "<Settings><graphics><TextureQuality value=\"2\" /><MSAA value=\"0\" /></graphics></Settings>", "b": "<Settings>\n  <graphics><MSAA value=\"0\"/><TextureQuality value=\"2\"/></graphics>\n</Settings>" },
+      "expect": { "same": true }
+    },
+    {
+      "id": "compare-real-change",
+      "desc": "A changed value IS different",
+      "kind": "compare",
+      "inputs": { "a": "<Settings><graphics><TextureQuality value=\"2\" /></graphics></Settings>", "b": "<Settings><graphics><TextureQuality value=\"3\" /></graphics></Settings>" },
+      "expect": { "same": false }
+    },
+    {
+      "id": "policy-migrates-legacy-2.6",
+      "desc": "A 2.5/2.6 config (no cfgVersion, onExit=adopt, window 120) moves to the v1 policy",
+      "kind": "policy",
+      "inputs": { "cfgVersion": 0, "guardWindowSec": 120, "allowAdopt": null },
+      "expect": { "cfgVersion": 3, "guardWindowSec": 0, "allowAdopt": false }
+    },
+    {
+      "id": "policy-repairs-unmigrated-first-build",
+      "desc": "Configs stamped cfgVersion=2 by the first 2.6.1 build but not migrated are repaired",
+      "kind": "policy",
+      "inputs": { "cfgVersion": 2, "guardWindowSec": 120, "allowAdopt": false },
+      "expect": { "cfgVersion": 3, "guardWindowSec": 0, "allowAdopt": false }
+    },
+    {
+      "id": "policy-keeps-user-choice",
+      "desc": "Once the config is at version 3 its values are a user decision and stay untouched",
+      "kind": "policy",
+      "inputs": { "cfgVersion": 3, "guardWindowSec": 300, "allowAdopt": true },
+      "expect": { "cfgVersion": 3, "guardWindowSec": 300, "allowAdopt": true }
+    }
+  ]
+}

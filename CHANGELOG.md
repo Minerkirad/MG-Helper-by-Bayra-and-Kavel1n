@@ -5,6 +5,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 ### Added
+- Parity runner (3.0 stage B): `tools\parity\expected.json` holds 21 scenarios as
+  data (`guard`, `adopt`, `golden-source`, `apply`, `compare`, `policy`) and
+  `tools\parity.ps1` executes them against the selected implementation - today the
+  PS watcher, later the C# core via `-Implementation core`. Divergence exits 1;
+  `tools\check.ps1` §11x requires at least 20 scenarios and a fully green run.
+  This is the strangler contract: "the new component produces the same decisions
+  on the same inputs", checked on every commit instead of by eye.
 - Contracts (MG3-011): `docs\contracts\` now holds JSON Schemas for the three
   formats that cross a process boundary - `state.json`, `watcher.health.json` and
   one `events.jsonl` line - plus `tools\validate-contracts.ps1`, a dependency-free
