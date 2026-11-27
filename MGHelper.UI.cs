@@ -39,6 +39,7 @@ public static class MgHelperUi
     private static Icon trayGray;
     private static System.Windows.Forms.Timer pollTimer;
     private static bool smoke;
+    private static bool uiFallback;
     private static string shotDir;
     private static string sourceLogged;
 
@@ -53,6 +54,12 @@ public static class MgHelperUi
         if (string.IsNullOrEmpty(dataRoot))
             dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MG_Helper");
         uiDir = Path.Combine(appDir, "ui");
+        // Проверка окружения: приложение обязано работать и там, где нет WebView2
+        // или ОС/права не такие, как на машине разработчика (docs/PORTABILITY.md).
+        string envFlag = Environment.GetEnvironmentVariable("MG_UI_FORCE_FALLBACK");
+        uiFallback = envFlag == "1" || !WebView2RuntimePresent();
+        int envIdx = args == null ? -1 : Array.IndexOf(args, "--env");
+        if (envIdx >= 0) { WriteEnvironmentReport(); return 0; }
         if (!Directory.Exists(uiDir))
         {
             string nested = Path.Combine(appDir, "App");
@@ -91,8 +98,176 @@ public static class MgHelperUi
 
     // ---------------- window ----------------
 
+    private static bool WebView2RuntimePresent()
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k1 = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+            using (Microsoft.Win32.RegistryKey k2 = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+            {
+                if (k1 != null && k1.GetValue("pv") != null) return true;
+                if (k2 != null && k2.GetValue("pv") != null) return true;
+            }
+            // Edge может держать компонент в HKCU при per-user установке
+            using (Microsoft.Win32.RegistryKey k3 = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+            {
+                return k3 != null && k3.GetValue("pv") != null;
+            }
+        }
+        catch { return false; }
+    }
+
+    private static string WebView2Version()
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"))
+            {
+                if (k != null) { object v = k.GetValue("pv"); if (v != null) return Convert.ToString(v); }
+            }
+        }
+        catch { }
+        return "";
+    }
+
+    private static bool DirWritable(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            string probe = Path.Combine(path, ".mg-write-probe");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static void WriteEnvironmentReport()
+    {
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("{\"schema\":1");
+            sb.Append(",\"uiVersion\":\"").Append(Json(UiVersion)).Append('"');
+            sb.Append(",\"osVersion\":\"").Append(Json(Environment.OSVersion.VersionString)).Append('"');
+            sb.Append(",\"os64\":").Append(Environment.Is64BitOperatingSystem ? "true" : "false");
+            sb.Append(",\"webView2\":").Append(WebView2RuntimePresent() ? "true" : "false");
+            sb.Append(",\"webView2Version\":\"").Append(Json(WebView2Version())).Append('"');
+            sb.Append(",\"fallbackMode\":").Append(uiFallback ? "true" : "false");
+            sb.Append(",\"appDir\":\"").Append(Json(appDir)).Append('"');
+            sb.Append(",\"dataRoot\":\"").Append(Json(dataRoot)).Append('"');
+            sb.Append(",\"dataRootWritable\":").Append(DirWritable(dataRoot) ? "true" : "false");
+            sb.Append(",\"dataRootIsDefault\":").Append(string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MG_HELPER_DIR")) ? "true" : "false");
+            sb.Append(",\"pipe\":\"").Append(Json(Environment.GetEnvironmentVariable("MG_HELPER_DIR") != null ? "MG_Helper_test" : "MG_Helper")).Append('"');
+            sb.Append(",\"taskPresent\":").Append(AutostartEnabled() ? "true" : "false");
+            sb.Append(",\"uiDirPresent\":").Append(Directory.Exists(uiDir) ? "true" : "false");
+            sb.Append(",\"user\":\"").Append(Json(Environment.UserName)).Append('"');
+            sb.Append(",\"interactive\":").Append(Environment.UserInteractive ? "true" : "false");
+            sb.Append("}");
+            File.WriteAllText(Path.Combine(appDir, "ui-env.json"), sb.ToString(), new UTF8Encoding(true));
+            Trace("env report written");
+        }
+        catch (Exception ex) { Trace("env report failed: " + ex.Message); }
+    }
+
+    private static void BuildFallbackWindow()
+    {
+        form = new Form();
+        form.Text = "MG Helper " + UiVersion + " — упрощённый режим";
+        form.Width = 720;
+        form.Height = 420;
+        form.StartPosition = FormStartPosition.CenterScreen;
+        form.BackColor = Color.FromArgb(15, 17, 21);
+        form.ForeColor = Color.FromArgb(232, 237, 244);
+        form.Icon = LoadIcon();
+
+        Label title = new Label();
+        title.Text = "MG Helper работает, но без полноценного окна";
+        title.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
+        title.AutoSize = false;
+        title.Left = 24; title.Top = 22; title.Width = 660; title.Height = 34;
+        form.Controls.Add(title);
+
+        Label body = new Label();
+        body.Text = "Не найден компонент Microsoft Edge WebView2 Runtime — он нужен для интерфейса.\r\n" +
+                    "Защита настроек от этого не зависит: watcher работает отдельно и продолжает охранять эталон.\r\n\r\n" +
+                    "Установите WebView2 Runtime (кнопка ниже), затем запустите MG Helper снова.";
+        body.Left = 24; body.Top = 66; body.Width = 660; body.Height = 110;
+        form.Controls.Add(body);
+
+        Label status = new Label();
+        status.Left = 24; status.Top = 186; status.Width = 660; status.Height = 40;
+        status.Text = StatusLine();
+        form.Controls.Add(status);
+
+        Button dl = new Button();
+        dl.Text = "Скачать WebView2 Runtime";
+        dl.Left = 24; dl.Top = 240; dl.Width = 220; dl.Height = 34;
+        dl.Click += delegate { try { Process.Start("https://go.microsoft.com/fwlink/p/?LinkId=2124703"); } catch { } };
+        form.Controls.Add(dl);
+
+        Button open = new Button();
+        open.Text = "Открыть папку MG Helper";
+        open.Left = 256; open.Top = 240; open.Width = 220; open.Height = 34;
+        open.Click += delegate { try { Process.Start("explorer.exe", "\"" + dataRoot + "\""); } catch { } };
+        form.Controls.Add(open);
+
+        Button diag = new Button();
+        diag.Text = "Диагностика";
+        diag.Left = 488; diag.Top = 240; diag.Width = 196; diag.Height = 34;
+        diag.Click += delegate { RunScript("diagnose.ps1", "-NoOpenReport", false); };
+        form.Controls.Add(diag);
+
+        System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        timer.Interval = 2000;
+        timer.Tick += delegate { status.Text = StatusLine(); };
+        timer.Start();
+        form.FormClosed += delegate { timer.Stop(); };
+
+        BuildTray();
+        if (smoke)
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                Thread.Sleep(1500);
+                try { File.WriteAllText(Path.Combine(appDir, "ui-smoke.txt"), "ok=1 title=MG Helper fallback=1", new UTF8Encoding(false)); } catch { }
+                try { form.BeginInvoke(new Action(delegate { Application.Exit(); })); } catch { Application.Exit(); }
+            });
+        }
+    }
+
+    private static string StatusLine()
+    {
+        try
+        {
+            Dictionary<string, object> health = ParseFlatJson(PipeStatusJson());
+            if (Get(health, "ok") != "true")
+            {
+                health = ParseFlatJson(ReadText(Path.Combine(dataRoot, "watcher.health.json"), 0));
+            }
+            string status = Get(health, "status");
+            if (string.IsNullOrEmpty(status)) return "Watcher: нет данных (проверьте задачу MG_Helper_Watcher)";
+            double age = HealthAgeSec(health);
+            string phase = Get(health, "phase");
+            return "Watcher: " + status + " · фаза " + (string.IsNullOrEmpty(phase) ? "?" : phase) +
+                   " · heartbeat " + (age < 0 ? "?" : Math.Round(age).ToString(CultureInfo.InvariantCulture) + " c");
+        }
+        catch { return "Watcher: нет данных"; }
+    }
+
     private static void BuildWindow()
     {
+        if (uiFallback)
+        {
+            Trace("building fallback window (WebView2 missing or forced)");
+            BuildFallbackWindow();
+            pollTimer = new System.Windows.Forms.Timer();
+            pollTimer.Interval = 5000;
+            pollTimer.Tick += delegate { if (tray != null) UpdateTray(ParseFlatJson(ReadText(Path.Combine(dataRoot, "watcher.health.json"), 0)), 0); };
+            pollTimer.Start();
+            return;
+        }
         form = new Form();
         form.Text = "MG Helper " + UiVersion;
         form.Width = 1120;

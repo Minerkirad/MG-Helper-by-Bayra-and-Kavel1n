@@ -805,6 +805,9 @@ if (Test-Path -LiteralPath $signBuild) {
     $unsigned = @($exes | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' })
     if ($exes.Count -gt 0 -and $unsigned.Count -eq 0) { Good 'signing: every built exe is signed and Valid (tamper check on the artefacts)' }
     else { Bad ("signing: unsigned artefacts - " + (($unsigned | ForEach-Object { $_.Name }) -join ', ')) }
+$portOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-portability.ps1') -Quiet 2>&1
+if ($LASTEXITCODE -eq 0) { Good 'portability: non-ASCII paths, missing WebView2 fallback and --env self-report work' }
+else { Bad ("portability: failed - " + (($portOut | Select-Object -Last 3) -join ' | ')) }
 } else { Bad 'signing: build folder missing, cannot verify signatures' }
 if (-not (Test-Path -LiteralPath $inst3)) { Bad 'installer 3.0: install-3.0.ps1 missing' }
 else {
