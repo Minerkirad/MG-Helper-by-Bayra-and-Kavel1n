@@ -32,13 +32,20 @@ public static class MgHelperUi
     private static WebView2 web;
     private static NotifyIcon tray;
     private static Icon trayIcon;
+    private static Icon trayGreen;
+    private static Icon trayGold;
+    private static Icon trayRed;
+    private static Icon trayGray;
     private static System.Windows.Forms.Timer pollTimer;
     private static bool smoke;
+    private static string shotDir;
 
     [STAThread]
     public static int Main(string[] args)
     {
         smoke = args != null && Array.IndexOf(args, "--smoke") >= 0;
+        int shotIdx = args == null ? -1 : Array.IndexOf(args, "--shot");
+        if (shotIdx >= 0 && args.Length > shotIdx + 1) { shotDir = args[shotIdx + 1]; }
         appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
         dataRoot = Environment.GetEnvironmentVariable("MG_HELPER_DIR");
         if (string.IsNullOrEmpty(dataRoot))
@@ -178,9 +185,24 @@ public static class MgHelperUi
 
     // ---------------- tray ----------------
 
+    private static Icon TrayIconFor(string name, Color fallback)
+    {
+        try
+        {
+            string path = Path.Combine(uiDir, "assets", "tray-" + name + ".ico");
+            if (File.Exists(path)) return new Icon(path);
+        }
+        catch { }
+        return MakeTrayIcon(fallback);
+    }
+
     private static void BuildTray()
     {
-        trayIcon = LoadIcon();
+        trayGreen = TrayIconFor("green", Color.FromArgb(59, 165, 93));
+        trayGold = TrayIconFor("gold", Color.Goldenrod);
+        trayRed = TrayIconFor("red", Color.FromArgb(200, 70, 70));
+        trayGray = TrayIconFor("gray", Color.Gray);
+        trayIcon = trayGray;
         tray = new NotifyIcon();
         tray.Icon = trayIcon;
         tray.Text = "MG Helper " + UiVersion;
@@ -353,9 +375,11 @@ public static class MgHelperUi
         else { color = Color.FromArgb(200, 70, 70); tip = "MG Helper: watcher не работает"; }
         try
         {
-            Icon old = tray.Icon;
-            tray.Icon = MakeTrayIcon(color);
-            if (old != null) old.Dispose();
+            Icon next = trayGray;
+            if (color.R == 59) { next = trayGreen; }
+            else if (color.R == 218 || color.R == 217) { next = trayGold; }
+            else if (color.R >= 190) { next = trayRed; }
+            if (tray.Icon != next) { tray.Icon = next; }
             if (tip.Length > 63) tip = tip.Substring(0, 63);
             tray.Text = tip;
         }
@@ -392,6 +416,10 @@ public static class MgHelperUi
             if (type == "ui-ready")
             {
                 Trace("ui-ready title=" + Get(msg, "title") + " bridge=" + Get(msg, "bridge"));
+                if (!string.IsNullOrEmpty(shotDir))
+                {
+                    form.BeginInvoke(new Action(TakeScreenshots));
+                }
                 if (smoke)
                 {
                     try { File.WriteAllText(Path.Combine(appDir, "ui-smoke.txt"), "ok=1 title=" + Get(msg, "title") + " bridge=" + Get(msg, "bridge"), new UTF8Encoding(false)); } catch { }
@@ -403,6 +431,63 @@ public static class MgHelperUi
             Command(cmd, msg);
         }
         catch (Exception ex) { Log("[!] message: " + ex.Message); }
+    }
+
+    private static void TakeScreenshots()
+    {
+        try
+        {
+            Directory.CreateDirectory(shotDir);
+            Shot("ui-dark.png", "document.body.classList.remove('light')");
+            Thread.Sleep(500);
+            Shot("ui-light.png", "document.body.classList.add('light')");
+            Thread.Sleep(700);
+        }
+        catch (Exception ex) { Trace("shots failed: " + ex.Message); }
+        finally { try { form.BeginInvoke(new Action(delegate { Application.Exit(); })); } catch { Application.Exit(); } }
+    }
+
+    private static void Shot(string fileName, string script)
+    {
+        string path = Path.Combine(shotDir, fileName);
+        try
+        {
+            System.Threading.Tasks.Task<string> scriptTask = web.CoreWebView2.ExecuteScriptAsync(script);
+            scriptTask.Wait(5000);
+            form.Activate();
+            form.TopMost = true;
+            form.TopMost = false;
+            Thread.Sleep(700);
+            bool captured = false;
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+                {
+                    System.Threading.Tasks.Task shotTask = web.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, fs);
+                    shotTask.Wait(8000);
+                }
+                captured = File.Exists(path) && new FileInfo(path).Length > 1000;
+            }
+            catch (Exception ex) { Trace("CapturePreview failed: " + ex.Message); }
+            if (!captured) CaptureWindow(path);
+            Trace("shot " + fileName + " bytes=" + (File.Exists(path) ? new FileInfo(path).Length.ToString() : "0"));
+        }
+        catch (Exception ex) { Trace("shot " + fileName + " failed: " + ex.Message); }
+    }
+
+    private static void CaptureWindow(string path)
+    {
+        try
+        {
+            Rectangle bounds = form.Bounds;
+            using (Bitmap bmp = new Bitmap(bounds.Width, bounds.Height))
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+                bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
+        }
+        catch (Exception ex) { Trace("window capture failed: " + ex.Message); }
     }
 
     private static void Notify(string text)

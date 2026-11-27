@@ -792,6 +792,20 @@ if ((Get-Content (Join-Path $repo 'common.ps1') -Raw) -match 'MG_TG_TOKEN') { Go
 $uiOut = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\integration-ui.ps1') -Quiet 2>&1
 if ($LASTEXITCODE -eq 0) { Good 'ui: MGHelper.exe renders the WebView2 page, bridges to the host and exits on --smoke' }
 else { Bad ("ui: smoke failed - " + (($uiOut | Select-Object -Last 3) -join ' | ')) }
+$signTxt = Get-Content (Join-Path $repo 'tools\sign.ps1') -Raw -ErrorAction SilentlyContinue
+if ($signTxt -match 'Set-AuthenticodeSignature' -and $signTxt -match 'CreateSelfSigned' -and $signTxt -match 'Pfx') {
+    Good 'signing: the pipeline supports a real PFX certificate and a local self-signed one'
+} else { Bad 'signing: tools\sign.ps1 is missing the PFX or self-signed path' }
+if (Test-Path -LiteralPath (Join-Path $repo 'assets\certs\mghelper-selfsigned.cer')) { Good 'signing: the public self-signed certificate is shipped in assets\certs' } else { Bad 'signing: assets\certs\mghelper-selfsigned.cer missing' }
+$signBuild = Join-Path $env:TEMP 'mg_build'
+if (Test-Path -LiteralPath $signBuild) {
+    $null = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\sign.ps1') -CreateSelfSigned -TrustLocal -Quiet 2>&1
+    $null = & $ps51 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\sign.ps1') -Auto -BuildDir $signBuild -Quiet 2>&1
+    $exes = @(Get-ChildItem $signBuild -Filter '*.exe' -ErrorAction SilentlyContinue)
+    $unsigned = @($exes | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' })
+    if ($exes.Count -gt 0 -and $unsigned.Count -eq 0) { Good 'signing: every built exe is signed and Valid (tamper check on the artefacts)' }
+    else { Bad ("signing: unsigned artefacts - " + (($unsigned | ForEach-Object { $_.Name }) -join ', ')) }
+} else { Bad 'signing: build folder missing, cannot verify signatures' }
 if (-not (Test-Path -LiteralPath $inst3)) { Bad 'installer 3.0: install-3.0.ps1 missing' }
 else {
     $i3 = Get-Content $inst3 -Raw

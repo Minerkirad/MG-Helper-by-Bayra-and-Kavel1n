@@ -19,3 +19,7 @@ telegram.json
 
 # WebView2 SDK скачивается tools\fetch-webview2.ps1 (бинарники в git не храним)
 ui/lib/
+
+# закрытые ключи подписи не коммитим никогда
+*.pfx
+*.pvk

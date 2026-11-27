@@ -1,0 +1,54 @@
+﻿name: CI
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke harness (Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check.ps1
+
+      - name: Sign artefacts (mandatory)
+        shell: powershell
+        run: |
+          # настоящий сертификат берём из секрета, иначе self-signed для проверки пайплайна
+          if ($env:SIGNING_PFX_BASE64) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-core.ps1 -Force | Out-Null
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-ui.ps1 -Force | Out-Null
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\sign.ps1 -Pfx $pfx -Auto
+          } else {
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-core.ps1 -Force | Out-Null
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-ui.ps1 -Force | Out-Null
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\sign.ps1 -CreateSelfSigned -TrustLocal
+            powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\sign.ps1 -Auto
+          }
+          $bad = @(Get-ChildItem (Join-Path $env:TEMP 'mg_build') -Filter *.exe | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' })
+          if ($bad.Count -gt 0) { Write-Host "UNSIGNED: $($bad.Name -join ', ')"; exit 1 }
+          Write-Host "All artefacts signed and Valid."
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          MG_SIGN_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+
+      - name: Pester 5 suite
+        shell: powershell
+        run: |
+          Install-Module Pester -MinimumVersion 5.0 -Force -Scope CurrentUser
+          Import-Module Pester -MinimumVersion 5.0
+          Invoke-Pester -Path .\tests -Output Minimal
+
+      - name: PSScriptAnalyzer (advisory)
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -Settings PSScriptAnalyzerSettings.psd1
+          $r | Format-Table -AutoSize
+          if ($r) { exit 1 }
