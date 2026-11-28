@@ -67,6 +67,7 @@ public static class MgHelperUi
         if (!smoke && string.IsNullOrEmpty(shotDir) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MG_HELPER_DIR")))
         {
             EnsureAutostartTask();
+            AutoReportIfNeeded();
         }
         if (!Directory.Exists(uiDir))
         {
@@ -514,6 +515,44 @@ public static class MgHelperUi
             }
         }
         catch { return null; }
+    }
+
+    private static void AutoReportIfNeeded()
+    {
+        // Реальная автоотправка: только если канал настроен (релей или Telegram) и
+        // включена опция. Срабатывает на НОВОЕ событие ошибки, один раз на событие.
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MG_HELPER_DIR"))) return;
+        try
+        {
+            Dictionary<string, object> c = ParseFlatJson(ReadText(Path.Combine(dataRoot, "config.json"), 0));
+            if (Get(c, "autoSendReports") == "false") return;
+            bool channel = Get(c, "reportUrl").Length > 0
+                || File.Exists(Path.Combine(dataRoot, "telegram.json"))
+                || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MG_TG_TOKEN"));
+            if (!channel) return;
+
+            string events = ReadText(Path.Combine(dataRoot, "events.jsonl"), 400000);
+            if (string.IsNullOrEmpty(events)) return;
+            string[] lines = events.Replace("\r", "").Split('\n');
+            string newest = "";
+            for (int i = lines.Length - 1; i >= 0 && i > lines.Length - 400; i--)
+            {
+                string line = lines[i];
+                if (line.IndexOf("\"event\":\"error\"", StringComparison.Ordinal) < 0 &&
+                    line.IndexOf("\"event\":\"apply.failed\"", StringComparison.Ordinal) < 0 &&
+                    line.IndexOf("\"event\":\"golden.mismatch\"", StringComparison.Ordinal) < 0) continue;
+                newest = Get(ParseFlatJson(line), "ts");
+                break;
+            }
+            if (newest.Length == 0) return;
+            string marker = Path.Combine(dataRoot, "last-auto-report.txt");
+            string last = ReadText(marker, 0);
+            if (last != null && last.Trim() == newest) return;
+            RunScript("diagnose.ps1", "-NoOpenReport -Send", false);
+            File.WriteAllText(marker, newest, new UTF8Encoding(false));
+            Log("[i] автоматический отчёт отправлен по событию " + newest);
+        }
+        catch (Exception ex) { Log("[!] auto report: " + ex.Message); }
     }
 
     private static void PushState()

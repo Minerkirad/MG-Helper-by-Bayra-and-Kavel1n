@@ -86,9 +86,10 @@
 
             <div class="card">
                 <div class="card-label">Автоматические отчёты</div>
-                <p class="muted" style="margin:8px 0 0">При ошибке защиты приложение само отправляет отчёт разработчику — без вашего участия.
-                    В отчёте есть версия, состояние защиты, конфиг и хвост журнала; пути пользователя маскируются, содержимое
-                    ваших настроек не уходит.</p>
+                <p class="muted" style="margin:8px 0 0">Отчёт — это файл с диагностикой. Он уходит разработчику,
+                    когда в защите происходит ошибка (применение эталона не удалось, чужое изменение не откатилось,
+                    эталон от другой машины) — но только если настроен канал отправки. Без канала отчёт остаётся
+                    на диске и никуда не уходит.</p>
                 <div class="row" style="margin-top:8px">
                     <div class="label"><span>Отправлять отчёты автоматически</span><small>можно выключить в любой момент</small></div>
                     <label class="switch"><input type="checkbox" id="autoSend"><i></i></label>
@@ -103,11 +104,13 @@
 
             <div class="grid two" style="margin-top:14px">
                 <div class="card"><div class="card-label">Что уходит</div>
-                    <p class="muted" style="margin-top:8px">ОС и версия PowerShell, версия MG Helper, состояние watcher'а и эталона,
-                        последние события, хвост лога, коды ошибок. Пути к папкам маскируются.</p></div>
+                    <p class="muted" style="margin-top:8px">Версия MG Helper, версия Windows и PowerShell, состояние watcher'а и эталона,
+                        последние события и хвост журнала, config с замаскированными путями (<code>C:\Users\&lt;USER&gt;</code>),
+                        два параметра графики (TextureQuality и CityDensity) и значения эталона для сравнения,
+                        имена файлов резервных копий.</p></div>
                 <div class="card"><div class="card-label">Что не уходит</div>
-                    <p class="muted" style="margin-top:8px">Содержимое settings.xml, файлы игры, никнеймы, пароли, данные аккаунтов.
-                        Отчёт — это диагностика, а не слежка.</p></div>
+                    <p class="muted" style="margin-top:8px">Полное содержимое settings.xml, файлы игры и Miami Graphics,
+                        никнеймы, пароли, данные аккаунтов. Имя пользователя Windows в путях заменяется на <code>&lt;USER&gt;</code>.</p></div>
             </div>
         </section>
 
