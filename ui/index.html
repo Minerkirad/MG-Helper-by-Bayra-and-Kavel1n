@@ -17,14 +17,14 @@
             </div>
         </div>
         <nav class="nav">
-            <button class="nav-item is-active" data-page="overview"><span class="ico">◈</span>Обзор</button>
-            <button class="nav-item" data-page="reports"><span class="ico">✉</span>Отчёты</button>
-            <button class="nav-item" data-page="log"><span class="ico">≡</span>Журнал</button>
-            <button class="nav-item" data-page="tools"><span class="ico">⚙</span>Инструменты</button>
-            <button class="nav-item" data-page="settings"><span class="ico">⚒</span>Настройки</button>
+            <button class="nav-item is-active" data-page="overview"><span class="ico">◈</span><span class="txt">Обзор</span></button>
+            <button class="nav-item" data-page="reports"><span class="ico">✉</span><span class="txt">Отчёты</span></button>
+            <button class="nav-item" data-page="log"><span class="ico">≡</span><span class="txt">Журнал</span></button>
+            <button class="nav-item" data-page="tools"><span class="ico">⚙</span><span class="txt">Инструменты</span></button>
+            <button class="nav-item" data-page="settings"><span class="ico">⚒</span><span class="txt">Настройки</span></button>
         </nav>
         <div class="sidebar-foot">
-            <button class="ghost" id="themeToggle">Тема</button>
+            <button class="ghost" id="themeToggle">Сменить тему</button>
         </div>
     </aside>
 
@@ -33,7 +33,7 @@
         <section class="page is-active" data-page="overview">
             <header class="page-head">
                 <h1>Обзор</h1>
-                <span class="muted" id="updatedAt">—</span>
+                <span class="chip" id="statusChip"><span class="dot"></span><span id="statusChipText">проверяю</span></span>
             </header>
 
             <div class="hero" id="hero">
@@ -82,11 +82,17 @@
 
         <!-- ОТЧЁТЫ -->
         <section class="page" data-page="reports">
-            <header class="page-head"><h1>Отчёты</h1></header>
-            <div class="card wide">
-                <p class="muted">Отчёт содержит версию, состояние защиты, конфиг и хвост журнала.
-                    Пути пользователя маскируются. Отправка — только с вашего согласия.</p>
-                <label class="check"><input type="checkbox" id="autoSend"> Отправлять автоматически при ошибке</label>
+            <header class="page-head"><h1>Отчёты</h1><span class="chip"><span class="dot"></span><span id="reportChipText">автоотправка включена</span></span></header>
+
+            <div class="card">
+                <div class="card-label">Автоматические отчёты</div>
+                <p class="muted" style="margin:8px 0 0">При ошибке защиты приложение само отправляет отчёт разработчику — без вашего участия.
+                    В отчёте есть версия, состояние защиты, конфиг и хвост журнала; пути пользователя маскируются, содержимое
+                    ваших настроек не уходит.</p>
+                <div class="row" style="margin-top:8px">
+                    <div class="label"><span>Отправлять отчёты автоматически</span><small>можно выключить в любой момент</small></div>
+                    <label class="switch"><input type="checkbox" id="autoSend"><i></i></label>
+                </div>
                 <div class="actions">
                     <button class="btn primary" data-cmd="diagnose">Собрать отчёт</button>
                     <button class="btn" data-cmd="send-report">Отправить последний</button>
@@ -94,51 +100,89 @@
                 </div>
                 <div class="status-line" id="reportStatus"></div>
             </div>
+
+            <div class="grid two" style="margin-top:14px">
+                <div class="card"><div class="card-label">Что уходит</div>
+                    <p class="muted" style="margin-top:8px">ОС и версия PowerShell, версия MG Helper, состояние watcher'а и эталона,
+                        последние события, хвост лога, коды ошибок. Пути к папкам маскируются.</p></div>
+                <div class="card"><div class="card-label">Что не уходит</div>
+                    <p class="muted" style="margin-top:8px">Содержимое settings.xml, файлы игры, никнеймы, пароли, данные аккаунтов.
+                        Отчёт — это диагностика, а не слежка.</p></div>
+            </div>
         </section>
 
         <!-- ЖУРНАЛ -->
         <section class="page" data-page="log">
             <header class="page-head"><h1>Журнал</h1><span class="muted" id="logHint">события watcher'а</span></header>
-            <div class="log" id="logBox"><div class="empty">Загружаю…</div></div>
+            <div class="toolbar">
+                <button class="tag is-active" data-log="all">Все</button>
+                <button class="tag" data-log="golden">Эталон</button>
+                <button class="tag" data-log="session">Сессии</button>
+                <button class="tag" data-log="guard">Охрана</button>
+                <button class="tag" data-log="error">Ошибки</button>
+            </div>
+            <div class="log" id="logBox"><span class="ln">Загружаю…</span></div>
         </section>
 
         <!-- ИНСТРУМЕНТЫ -->
         <section class="page" data-page="tools">
-            <header class="page-head"><h1>Инструменты</h1></header>
+            <header class="page-head"><h1>Инструменты</h1><span class="muted">опасные действия спросят подтверждение</span></header>
             <div class="grid two">
                 <div class="card"><div class="card-label">Эталон</div>
-                    <p class="muted">Сделать текущие настройки игры новым эталоном.</p>
-                    <button class="btn primary" data-cmd="new-golden">Новый эталон</button>
+                    <p class="muted" style="margin-top:8px">Сделать текущие настройки игры новым эталоном защиты.</p>
+                    <div class="actions"><button class="btn primary" data-cmd="new-golden">Новый эталон</button></div>
                 </div>
-                <div class="card"><div class="card-label">Сброс</div>
-                    <p class="muted">Вернуть настройки игры к эталону.</p>
-                    <button class="btn" data-cmd="reset-settings">Сбросить настройки</button>
+                <div class="card"><div class="card-label">Сброс настроек</div>
+                    <p class="muted" style="margin-top:8px">Вернуть файл настроек игры к эталону (перед записью — копия).</p>
+                    <div class="actions"><button class="btn" data-cmd="reset-settings">Сбросить настройки</button></div>
                 </div>
                 <div class="card"><div class="card-label">Miami Graphics</div>
-                    <p class="muted">Восстановить конфиги MG из снапшота.</p>
-                    <button class="btn" data-cmd="restore-mg">Восстановить MG</button>
+                    <p class="muted" style="margin-top:8px">Восстановить конфиги MG из последнего снапшота.</p>
+                    <div class="actions"><button class="btn" data-cmd="restore-mg">Восстановить MG</button></div>
+                </div>
+                <div class="card"><div class="card-label">Диагностика</div>
+                    <p class="muted" style="margin-top:8px">Полный отчёт о состоянии: файлы, события, окружение.</p>
+                    <div class="actions"><button class="btn" data-cmd="diagnose">Запустить диагностику</button></div>
                 </div>
                 <div class="card"><div class="card-label">Старое меню</div>
-                    <p class="muted">Полный набор пунктов 1–15 (PS-меню).</p>
-                    <button class="btn" data-cmd="open-menu">Открыть меню</button>
+                    <p class="muted" style="margin-top:8px">Полный набор пунктов 1–15 в консольном меню (аварийный путь).</p>
+                    <div class="actions"><button class="btn" data-cmd="open-menu">Открыть меню</button></div>
+                </div>
+                <div class="card"><div class="card-label">Папка данных</div>
+                    <p class="muted" style="margin-top:8px">Эталон, копии, снапшоты, журналы — всё локально.</p>
+                    <div class="actions"><button class="btn" data-cmd="open-folder">Открыть папку</button></div>
                 </div>
             </div>
         </section>
 
         <!-- НАСТРОЙКИ -->
         <section class="page" data-page="settings">
-            <header class="page-head"><h1>Настройки</h1></header>
-            <div class="card wide">
-                <label class="row"><span>Принимать правки из игры как новый эталон</span>
-                    <input type="checkbox" id="allowAdopt"></label>
-                <label class="row"><span>Охрана сессии</span>
-                    <input type="checkbox" id="sessionGuard"></label>
-                <label class="row"><span>Окно охраны, секунд (0 = вся сессия)</span>
-                    <input type="number" id="guardWindow" min="0" step="30"></label>
-                <label class="row"><span>Автозапуск с Windows</span>
-                    <input type="checkbox" id="autostart"></label>
-                <div class="actions"><button class="btn primary" id="saveSettings">Сохранить</button>
-                    <span class="status-line" id="settingsStatus"></span></div>
+            <header class="page-head"><h1>Настройки</h1><span class="muted">применяются сразу</span></header>
+            <div class="card">
+                <div class="row">
+                    <div class="label"><span>Принимать правки из игры как новый эталон</span>
+                        <small>по умолчанию эталон восстанавливается при выходе</small></div>
+                    <label class="switch"><input type="checkbox" id="allowAdopt"><i></i></label>
+                </div>
+                <div class="row">
+                    <div class="label"><span>Охрана во время игры</span>
+                        <small>чужая запись в settings.xml откатывается</small></div>
+                    <label class="switch"><input type="checkbox" id="sessionGuard"><i></i></label>
+                </div>
+                <div class="row">
+                    <div class="label"><span>Окно охраны, секунд</span>
+                        <small>0 — охранять всю сессию</small></div>
+                    <input type="number" id="guardWindow" min="0" step="30" value="0">
+                </div>
+                <div class="row">
+                    <div class="label"><span>Автозапуск с Windows</span>
+                        <small>приложение и watcher стартуют при входе</small></div>
+                    <label class="switch"><input type="checkbox" id="autostart"><i></i></label>
+                </div>
+                <div class="actions">
+                    <button class="btn primary" id="saveSettings">Сохранить</button>
+                    <span class="status-line" id="settingsStatus"></span>
+                </div>
             </div>
         </section>
     </main>

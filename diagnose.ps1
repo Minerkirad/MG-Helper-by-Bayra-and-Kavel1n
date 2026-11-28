@@ -361,7 +361,7 @@ if ($common -or (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue
         if ($autoSend) { $wantSend = $true }
     }
     if ($wantSend -and (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue)) {
-        $sent = Send-TelegramDocument -Path $reportPath -Caption ("MG Helper {0} - {1}" -f (Get-PkgVersion), $env:COMPUTERNAME)
+        $sent = Send-MgReport -Path $reportPath -Caption ("MG Helper {0} - {1}" -f (Get-PkgVersion), $env:COMPUTERNAME)
         if ($sent.ok) { Write-Host '[+] Отчёт отправлен в Telegram.' -ForegroundColor Green }
         else { Write-Host ("[!] Отчёт НЕ отправлен: " + $(if ($sent.error) { $sent.error } else { "HTTP $($sent.status)" })) -ForegroundColor Yellow }
     }

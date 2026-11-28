@@ -52,6 +52,8 @@ if (-not $SkipBuild) {
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $stage $f) -Force }
     }
     Copy-Item (Join-Path $repoRoot 'ui') -Destination (Join-Path $stage 'ui') -Recurse -Force
+    $certSrc = Join-Path $repoRoot 'assets\certs'
+    if (Test-Path -LiteralPath $certSrc) { Copy-Item $certSrc -Destination (Join-Path $stage 'certs') -Recurse -Force }
     Remove-Item (Join-Path $stage 'ui\lib') -Recurse -Force -ErrorAction SilentlyContinue
 }
 

@@ -735,6 +735,53 @@ function Get-TelegramConfig {
     return @{ token = $token; chatId = $chat }
 }
 
+function Get-ReportUrl {
+    # URL релея из config.json (reportUrl) или env MG_REPORT_URL; пусто - значит релея нет
+    if ($env:MG_REPORT_URL) { return $env:MG_REPORT_URL }
+    try {
+        $cfgPath = Join-Path $script:HelperDir 'config.json'
+        if (Test-Path -LiteralPath $cfgPath) {
+            $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+            if ($cfg.reportUrl) { return [string]$cfg.reportUrl }
+        }
+    } catch { }
+    return $null
+}
+
+function Send-MgReport {
+    # Единая точка отправки: сначала релей (если настроен), затем Telegram, иначе честный отказ.
+    # В пакете нет ни токена бота, ни чужих секретов - только URL релея.
+    param([string]$Path, [string]$Caption = '', [string]$ApiBase = 'https://api.telegram.org')
+    if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $false; error = "файл не найден: $Path" } }
+    $url = Get-ReportUrl
+    if ($url) {
+        $client = $null
+        $content = $null
+        try {
+            Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+            $client = [System.Net.Http.HttpClient]::new()
+            $client.Timeout = [TimeSpan]::FromSeconds(60)
+            $content = [System.Net.Http.MultipartFormDataContent]::new()
+            $content.Add([System.Net.Http.StringContent]::new((Get-PkgVersion)), 'version')
+            if ($Caption) { $content.Add([System.Net.Http.StringContent]::new($Caption), 'caption') }
+            $bytes = [IO.File]::ReadAllBytes($Path)
+            $file = [System.Net.Http.ByteArrayContent]::new($bytes)
+            $file.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('text/plain')
+            $content.Add($file, 'document', [IO.Path]::GetFileName($Path))
+            $resp = $client.PostAsync($url, $content).Result
+            $body = $resp.Content.ReadAsStringAsync().Result
+            return @{ ok = [bool]$resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; body = $body; via = 'relay' }
+        } catch {
+            return @{ ok = $false; error = $_.Exception.Message; via = 'relay' }
+        } finally {
+            if ($content) { try { $content.Dispose() } catch {} }
+            if ($client) { try { $client.Dispose() } catch {} }
+        }
+    }
+    $tg = Send-TelegramDocument -Path $Path -Caption $Caption -ApiBase $ApiBase
+    if ($tg -and $tg.ok) { $tg.via = 'telegram' }
+    return $tg
+}
 function Send-TelegramDocument {
     # multipart/form-data через .NET HttpClient (PS 5.1 без -Form). -ApiBase нужен тестам.
     param([string]$Path, [string]$Caption = '', [string]$ApiBase = 'https://api.telegram.org')

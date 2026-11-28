@@ -86,7 +86,14 @@
         text('watcherState', h ? (h.status || '—') : '—');
         text('watcherHint', h ? 'PID ' + h.pid + ' · heartbeat ' + (h.ageSec === null ? '—' : Math.round(h.ageSec) + ' c') : 'нет данных');
         text('brandVersion', state.version || '');
-        text('updatedAt', 'обновлено ' + new Date().toLocaleTimeString('ru-RU'));
+        var chip = $('statusChip');
+        var chipText = $('statusChipText');
+        if (chip) {
+            chip.className = 'chip ' + (safeMode || stopped ? 'bad' : (healthy ? 'ok' : 'warn'));
+            if (chipText) { chipText.textContent = safeMode ? 'защита выключена' : (stopped ? 'watcher остановлен' : (healthy ? 'защищено' : 'не отвечает')); }
+        }
+        var rep = $('reportChipText');
+        if (rep) { rep.textContent = state.ui.autoSend === false ? 'автоотправка выключена' : 'автоотправка включена'; }
 
         renderEvents();
         renderSettings(s);
@@ -105,14 +112,37 @@
         }
         box.innerHTML = html;
         var log = $('logBox');
-        if (log) {
-            var all = (state.events || []).slice(-300);
-            var lines = [];
-            for (var j = 0; j < all.length; j++) {
-                lines.push(fmtTime(all[j].ts) + '  [' + all[j].phase + ']  ' + all[j].event + '  ' + (all[j].data || ''));
-            }
-            log.textContent = lines.join('\n') || 'Событий пока нет';
+        if (log) { renderLog(); }
+    }
+
+    var logFilter = 'all';
+    function renderLog() {
+        var log = $('logBox');
+        if (!log) { return; }
+        var groups = {
+            golden: ['golden.applied', 'golden.mismatch', 'adopt.accepted', 'apply.failed'],
+            session: ['session.start', 'session.end', 'session.unknown'],
+            guard: ['guard.rollback', 'guard.window_expired', 'insurance.restored', 'insurance.risk'],
+            error: ['error', 'apply.failed', 'golden.mismatch']
+        };
+        var all = (state.events || []).slice(-400);
+        if (logFilter !== 'all') {
+            var allowed = groups[logFilter] || [];
+            all = all.filter(function (e) { return allowed.indexOf(e.event) >= 0; });
         }
+        if (!all.length) { log.innerHTML = '<span class="ln">Событий пока нет</span>'; return; }
+        var html = '';
+        for (var i = 0; i < all.length; i++) {
+            var ev = all[i];
+            var cls = '';
+            if (ev.event === 'error' || ev.event === 'apply.failed' || ev.event === 'golden.mismatch') { cls = ' bad'; }
+            else if (ev.event === 'guard.rollback' || ev.event === 'session.unknown' || ev.event === 'insurance.risk') { cls = ' warn'; }
+            else if (ev.event === 'golden.applied' || ev.event === 'adopt.accepted' || ev.event === 'session.end') { cls = ' ok'; }
+            html += '<span class="ln' + cls + '"><span class="tm">' + fmtTime(ev.ts) + '</span>' +
+                escapeHtml(ev.event) + (ev.data ? '  ·  ' + escapeHtml(ev.data) : '') + '</span>';
+        }
+        log.innerHTML = html;
+        log.scrollTop = log.scrollHeight;
     }
 
     function renderSettings(s) {
@@ -271,6 +301,14 @@
             if (data.type === 'status') { window.mg.status(data.text); }
         });
     }
+
+    document.querySelectorAll('.tag[data-log]').forEach(function (tag) {
+        tag.addEventListener('click', function () {
+            logFilter = tag.getAttribute('data-log');
+            document.querySelectorAll('.tag[data-log]').forEach(function (t) { t.classList.toggle('is-active', t === tag); });
+            renderLog();
+        });
+    });
 
     wireModal();
 

@@ -853,6 +853,18 @@ public static class MgHelperUi
             File.WriteAllText(Path.Combine(data, "version.json"), "{\r\n    \"version\": \"" + Json(version) + "\"\r\n}", new UTF8Encoding(false));
             NotifyInstallLine("[+] скрипты поддержки обновлены (" + copied + "), данные не тронуты");
 
+            // 3.5 сертификат: делаем подпись доверенной для ЭТОГО пользователя (certutil -user, без админа)
+            try
+            {
+                string cer = Path.Combine(versionDir, "certs", "mghelper-selfsigned.cer");
+                if (!sandbox && File.Exists(cer))
+                {
+                    RunHidden("certutil", "-user -addstore Root \"" + cer + "\"");
+                    NotifyInstallLine("[+] сертификат издателя добавлен в доверенные (текущий пользователь)");
+                }
+            }
+            catch (Exception ex) { NotifyInstallLine("[!] сертификат: " + ex.Message); }
+
             // 4. автозапуск: задача watcher'а + ярлык приложения
             if (!sandbox)
             {
