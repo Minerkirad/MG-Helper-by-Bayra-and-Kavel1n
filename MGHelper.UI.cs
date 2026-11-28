@@ -25,7 +25,7 @@ using Microsoft.Web.WebView2.WinForms;
 
 public static class MgHelperUi
 {
-    public const string UiVersion = "3.1.0-dev";
+    public static string UiVersion = "3.1.0";
     private static string dataRoot;
     private static string appDir;
     private static string uiDir;
@@ -54,6 +54,19 @@ public static class MgHelperUi
         if (string.IsNullOrEmpty(dataRoot))
             dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MG_Helper");
         uiDir = Path.Combine(appDir, "ui");
+        // Версию берём из version.json рядом с exe: заголовок окна должен показывать
+        // реальную версию, а не зашитое в код значение.
+        try
+        {
+            string vf0 = Path.Combine(appDir, "version.json");
+            if (File.Exists(vf0))
+            {
+                string vtext0 = System.IO.File.ReadAllText(vf0);
+                Match vm = Regex.Match(vtext0, "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                if (vm.Success) { UiVersion = vm.Groups[1].Value; }
+            }
+        }
+        catch { }
         // Проверка окружения: приложение обязано работать и там, где нет WebView2
         // или ОС/права не такие, как на машине разработчика (docs/PORTABILITY.md).
         string envFlag = Environment.GetEnvironmentVariable("MG_UI_FORCE_FALLBACK");
