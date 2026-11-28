@@ -628,6 +628,81 @@ public static class MgHelperUi
         return digits.Length == 0 ? "null" : digits;
     }
 
+    private static string RepoLatestRelease = "https://api.github.com/repos/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/releases/latest";
+
+    private static int[] VersionParts(string v)
+    {
+        // "3.1.0-beta.1" -> [3,1,0,1]; всё после '-' считаем ниже релиза
+        if (string.IsNullOrEmpty(v)) return new int[] { 0, 0, 0, 0 };
+        string core = v;
+        int dash = v.IndexOf('-');
+        bool prerelease = dash >= 0;
+        if (prerelease) core = v.Substring(0, dash);
+        string[] bits = core.Split('.');
+        int[] parts = new int[] { 0, 0, 0, 0 };
+        for (int i = 0; i < bits.Length && i < 3; i++)
+        {
+            int n;
+            if (int.TryParse(bits[i], out n)) parts[i] = n;
+        }
+        parts[3] = prerelease ? 0 : 1;
+        return parts;
+    }
+
+    private static string VersionSuffix(string v)
+    {
+        if (string.IsNullOrEmpty(v)) return "";
+        int dash = v.IndexOf('-');
+        return dash >= 0 ? v.Substring(dash + 1) : "";
+    }
+
+    private static int CompareVersions(string a, string b)
+    {
+        int[] pa = VersionParts(a);
+        int[] pb = VersionParts(b);
+        for (int i = 0; i < 4; i++)
+        {
+            if (pa[i] != pb[i]) return pa[i] < pb[i] ? -1 : 1;
+        }
+        // одинаковые цифры: сравнить хвост (beta.2 > beta.1)
+        return string.CompareOrdinal(VersionSuffix(a), VersionSuffix(b));
+    }
+
+    private static void CheckUpdates()
+    {
+        // Читаем последний релиз с GitHub. Сеть может быть недоступна - тогда честно говорим.
+        try
+        {
+            string current = UiVersion;
+            string vf = Path.Combine(appDir, "version.json");
+            if (File.Exists(vf))
+            {
+                Dictionary<string, object> v = ParseFlatJson(ReadText(vf, 0));
+                if (Get(v, "version").Length > 0) current = Get(v, "version");
+            }
+            using (System.Net.Http.HttpClient client = new System.Net.Http.HttpClient())
+            {
+                client.Timeout = TimeSpan.FromSeconds(15);
+                client.DefaultRequestHeaders.Add("User-Agent", "MG-Helper/" + current);
+                string body = client.GetStringAsync(RepoLatestRelease).Result;
+                string tag = Regex.Match(body, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value;
+                string name = Regex.Match(body, "\"name\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value;
+                if (tag.Length == 0) { Notify("Не удалось разобрать ответ GitHub"); return; }
+                string latest = tag.TrimStart('v', 'V');
+                int cmp = CompareVersions(latest, current);
+                if (cmp > 0) Notify("Доступна версия " + latest + " (у вас " + current + "). Скачать: страница релизов");
+                else if (cmp == 0) Notify("У вас последняя версия " + current);
+                else Notify("У вас " + current + " — новее, чем релиз " + latest);
+                Log("[i] update check: current=" + current + " latest=" + latest + " (" + name + ")");
+            }
+        }
+        catch (Exception ex)
+        {
+            Notify("Не удалось проверить обновления: нет связи или GitHub недоступен");
+            Log("[!] update check: " + ex.Message);
+        }
+    }
+
     private static void UpdateTray(Dictionary<string, object> health, double age)
     {
         if (tray == null) return;
@@ -822,6 +897,13 @@ public static class MgHelperUi
                     break;
                 case "restore-mg":
                     RunScript("restore-mg-snapshot.ps1", "", true);
+                    break;
+                case "check-updates":
+                    ThreadPool.QueueUserWorkItem(delegate { CheckUpdates(); });
+                    Notify("Проверяю обновления…");
+                    break;
+                case "open-release":
+                    try { Process.Start("https://github.com/Minerkirad/MG-Helper-by-Bayra-and-Kavel1n/releases/latest"); } catch { }
                     break;
                 case "open-menu":
                     string bat = Path.Combine(dataRoot, "MG-Helper.bat");

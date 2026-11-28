@@ -293,8 +293,9 @@
         },
         status: function (message) {
             text('reportStatus', message);
+            text('updateStatus', message);
             toast(message);
-            setTimeout(function () { text('reportStatus', ''); }, 4000);
+            setTimeout(function () { text('reportStatus', ''); text('updateStatus', ''); }, 5000);
         }
     };
 

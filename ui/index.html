@@ -151,6 +151,15 @@
                     <p class="muted" style="margin-top:8px">Полный набор пунктов 1–15 в консольном меню (аварийный путь).</p>
                     <div class="actions"><button class="btn" data-cmd="open-menu">Открыть меню</button></div>
                 </div>
+                <div class="card"><div class="card-label">Обновление</div>
+                    <p class="muted" style="margin-top:8px">Проверить, не вышла ли новая версия. Обновление ставится
+                        запуском нового Setup.exe поверх текущей версии — данные и эталон не трогаются.</p>
+                    <div class="actions">
+                        <button class="btn" data-cmd="check-updates">Проверить обновления</button>
+                        <button class="btn" data-cmd="open-release">Страница релизов</button>
+                    </div>
+                    <div class="status-line" id="updateStatus"></div>
+                </div>
                 <div class="card"><div class="card-label">Папка данных</div>
                     <p class="muted" style="margin-top:8px">Эталон, копии, снапшоты, журналы — всё локально.</p>
                     <div class="actions"><button class="btn" data-cmd="open-folder">Открыть папку</button></div>
