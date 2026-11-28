@@ -18,6 +18,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$BotToken,
     [string]$ChatId,
+    [string]$MgKey,
     [string]$WorkerName = 'mg-helper-reports',
     [string]$KeyPath = '/mg-helper-reports/report'
 )
@@ -36,7 +37,7 @@ $accountId = $accounts.result[0].id
 Write-Host "[i] аккаунт: $($accounts.result[0].name) ($accountId)"
 # --- 2. заливка воркера (multipart/form-data, ES-модуль) ---
 $workerSrc = Get-Content -LiteralPath (Join-Path $repo 'relay\worker.js') -Raw
-$meta = @{ main_module = 'worker.js'; compatibility_date = '2024-11-01' } | ConvertTo-Json -Compress
+$meta = @{ main_module = 'worker.js'; compatibility_date = '2024-11-01'; workers_dev = $true } | ConvertTo-Json -Compress   # workers_dev = публикация на *.workers.dev
 $tmpMeta = Join-Path $env:TEMP ('cf_meta_' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.json')
 $tmpCode = Join-Path $env:TEMP ('cf_worker_' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.mjs')
 [IO.File]::WriteAllText($tmpMeta, $meta, [Text.UTF8Encoding]::new($false))
@@ -45,7 +46,7 @@ try {
     $up = & curl.exe -s -X PUT "$api/accounts/$accountId/workers/scripts/$WorkerName" `
         -H "Authorization: Bearer $token" `
         -F "metadata=@$tmpMeta;type=application/json" `
-        -F "worker.js=@$tmpCode;type=application/javascript+module" 2>&1
+        -F "worker.js=@$tmpCode;filename=worker.js;type=application/javascript+module" 2>&1
     $upJson = $up | ConvertFrom-Json
     if (-not $upJson.success) { throw ('заливка не удалась: ' + ($upJson.errors | ConvertTo-Json -Compress)) }
     Write-Host "[+] воркер залит: $WorkerName" Green
@@ -61,17 +62,39 @@ if (-not $subdomain) {
     $created = Invoke-RestMethod -Method Put "$api/accounts/$accountId/workers/subdomain" -Headers $hdr -Body (@{ subdomain = $random } | ConvertTo-Json) -ContentType 'application/json' -TimeoutSec 30
     $subdomain = $created.result.subdomain
 }
+# публикация на *.workers.dev: включение маршрута скрипта (POST, не PUT - PUT отвечает 405)
+try {
+    $null = Invoke-RestMethod -Method Post "$api/accounts/$accountId/workers/scripts/$WorkerName/subdomain" -Headers $hdr `
+        -Body (@{ enabled = $true; previews_enabled = $true } | ConvertTo-Json) -ContentType 'application/json' -TimeoutSec 30
+    Write-Host '[+] маршрут workers.dev включён' -ForegroundColor Green
+} catch {
+    Write-Host ('[!] маршрут workers.dev: ' + $_.Exception.Message) -ForegroundColor Yellow
+}
 $workerUrl = "https://$WorkerName.$subdomain.workers.dev"
 Write-Host "[i] адрес воркера: $workerUrl" Cyan
 # --- 4. секреты ---
-$mgKey = [guid]::NewGuid().ToString('N')
+# Ключ /discover хранится вне репозитория и переиспользуется между деплоями
+$keyFile = Join-Path (Join-Path $env:LOCALAPPDATA 'MG_Helper') 'relay.key'
+if ($MgKey) { $mgKey = $MgKey }
+elseif (Test-Path -LiteralPath $keyFile) { $mgKey = ([IO.File]::ReadAllText($keyFile)).Trim() }
+else { $mgKey = [guid]::NewGuid().ToString('N') }
+try {
+    New-Item -ItemType Directory -Force -Path (Split-Path $keyFile -Parent) | Out-Null
+    [IO.File]::WriteAllText($keyFile, $mgKey, [Text.UTF8Encoding]::new($false))
+} catch { }
 function Set-Secret([string]$name, [string]$value) {
+    # через Invoke-RestMethod, а не curl: PowerShell ломает JSON в аргументах командной строки
     $body = @{ name = $name; text = $value; type = 'secret_text' } | ConvertTo-Json -Compress
-    $r = & curl.exe -s -X PUT "$api/accounts/$accountId/workers/scripts/$WorkerName/secrets" `
-        -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d $body 2>&1
-    $rj = $r | ConvertFrom-Json
+    try {
+        $rj = Invoke-RestMethod -Method Put -Uri "$api/accounts/$accountId/workers/scripts/$WorkerName/secrets" `
+            -Headers @{ Authorization = "Bearer $token" } -Body ([Text.Encoding]::UTF8.GetBytes($body)) `
+            -ContentType 'application/json' -TimeoutSec 30
+    } catch {
+        $detail = if ($_.ErrorDetails) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        throw ("секрет $name не записан: " + $detail)
+    }
     if (-not $rj.success) { throw ("секрет $name не записан: " + ($rj.errors | ConvertTo-Json -Compress)) }
-    Write-Host "[+] секрет $name записан" Green
+    Write-Host "[+] секрет $name записан" -ForegroundColor Green
 }
 Set-Secret 'TG_TOKEN' $BotToken
 Set-Secret 'MG_KEY' $mgKey

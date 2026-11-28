@@ -41,6 +41,12 @@ export default {
                 return json({ ok: false, error: 'key' }, 401, cors);
             }
             if (!env.TG_TOKEN) return json({ ok: false, error: 'no-token' }, 500, cors);
+            let botName = '';
+            try {
+                const meResp = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/getMe`);
+                const me = await meResp.json();
+                if (me.ok && me.result) botName = me.result.username || '';
+            } catch (e) { }
             const resp = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/getUpdates?limit=20`);
             const data = await resp.json();
             if (!data.ok) return json({ ok: false, error: 'telegram', detail: data }, 502, cors);
@@ -51,7 +57,7 @@ export default {
                     chats.push({ id: msg.chat.id, type: msg.chat.type, name: msg.chat.username || msg.chat.title || msg.chat.first_name || '' });
                 }
             }
-            return json({ ok: true, chats: chats }, 200, cors);
+            return json({ ok: true, bot: botName, chats: chats }, 200, cors);
         }
 
         if (request.method !== 'POST') return json({ ok: false, error: 'method' }, 405, cors);

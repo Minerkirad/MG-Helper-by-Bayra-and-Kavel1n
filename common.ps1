@@ -65,8 +65,9 @@ function Get-MgConfig {
         # opt-in: правки на диске при выходе становятся новым эталоном.
         # По умолчанию выключено - эталон при выходе восстанавливается, как в 1.x.
         allowAdopt        = $false
-        autoSendReports   = $true
-        reportPaths       = 'masked'   # 'full' - присылать полные пути (с именем учётной записи)   # 3.1: отчёты уходят сразу, пользователь может выключить в приложении
+        autoSendReports   = $true    # 3.1: отчёты уходят сразу, пользователь может выключить в приложении
+        reportPaths       = 'masked' # 'full' - присылать полные пути (с именем учётной записи)
+        reportUrl         = 'https://mg-helper-reports.hh-autoapply-relay.workers.dev' # релей отчётов; токен бота живёт в секретах Cloudflare
         sessionGuard      = $true
         # 0 = охранять ВСЮ сессию (чужую перезапись откатывать в любой момент);
         # >0 = только первые N секунд (старое поведение)
@@ -750,32 +751,49 @@ function Get-ReportUrl {
 }
 
 function Send-MgReport {
-    # Единая точка отправки: сначала релей (если настроен), затем Telegram, иначе честный отказ.
+    # Единая точка отправки: сначала релей (если настроен), затем прямой Telegram.
     # В пакете нет ни токена бота, ни чужих секретов - только URL релея.
+    #
+    # multipart собирается вручную: MultipartFormDataContent в .NET Framework пишет
+    # Content-Disposition без кавычек, и парсер Cloudflare (undici) отвечает 400 "form".
     param([string]$Path, [string]$Caption = '', [string]$ApiBase = 'https://api.telegram.org')
     if (-not (Test-Path -LiteralPath $Path)) { return @{ ok = $false; error = "файл не найден: $Path" } }
     $url = Get-ReportUrl
     if ($url) {
         $client = $null
-        $content = $null
         try {
             Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+            $boundary = '----MGHelper' + [guid]::NewGuid().ToString('N')
+            $LF = "`r`n"
+            $sb = New-Object System.Text.StringBuilder
+            function Add-Field([string]$name, [string]$value) {
+                $null = $sb.Append("--$boundary$LF")
+                $null = $sb.Append("Content-Disposition: form-data; name=`"$name`"$LF$LF")
+                $null = $sb.Append("$value$LF")
+            }
+            Add-Field 'version' (Get-PkgVersion)
+            if ($Caption) { Add-Field 'caption' $Caption }
+            $null = $sb.Append("--$boundary$LF")
+            $null = $sb.Append("Content-Disposition: form-data; name=`"document`"; filename=`"$([IO.Path]::GetFileName($Path))`"$LF")
+            $null = $sb.Append("Content-Type: text/plain$LF$LF")
+            $head = [Text.Encoding]::UTF8.GetBytes($sb.ToString())
+            $fileBytes = [IO.File]::ReadAllBytes($Path)
+            $tail = [Text.Encoding]::UTF8.GetBytes("$LF--$boundary--$LF")
+            $body = New-Object byte[] ($head.Length + $fileBytes.Length + $tail.Length)
+            [Array]::Copy($head, 0, $body, 0, $head.Length)
+            [Array]::Copy($fileBytes, 0, $body, $head.Length, $fileBytes.Length)
+            [Array]::Copy($tail, 0, $body, $head.Length + $fileBytes.Length, $tail.Length)
+
             $client = [System.Net.Http.HttpClient]::new()
-            $client.Timeout = [TimeSpan]::FromSeconds(60)
-            $content = [System.Net.Http.MultipartFormDataContent]::new()
-            $content.Add([System.Net.Http.StringContent]::new((Get-PkgVersion)), 'version')
-            if ($Caption) { $content.Add([System.Net.Http.StringContent]::new($Caption), 'caption') }
-            $bytes = [IO.File]::ReadAllBytes($Path)
-            $file = [System.Net.Http.ByteArrayContent]::new($bytes)
-            $file.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('text/plain')
-            $content.Add($file, 'document', [IO.Path]::GetFileName($Path))
+            $client.Timeout = [TimeSpan]::FromSeconds(90)
+            $content = [System.Net.Http.ByteArrayContent]::new($body)
+            $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("multipart/form-data; boundary=$boundary")
             $resp = $client.PostAsync($url, $content).Result
-            $body = $resp.Content.ReadAsStringAsync().Result
-            return @{ ok = [bool]$resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; body = $body; via = 'relay' }
+            $respBody = $resp.Content.ReadAsStringAsync().Result
+            return @{ ok = [bool]$resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; body = $respBody; via = 'relay' }
         } catch {
             return @{ ok = $false; error = $_.Exception.Message; via = 'relay' }
         } finally {
-            if ($content) { try { $content.Dispose() } catch {} }
             if ($client) { try { $client.Dispose() } catch {} }
         }
     }
