@@ -42,5 +42,5 @@ WebView2 Runtime (на Windows 11 установлен по умолчанию, 
 Откройте «Инструменты → Диагностика»: там состояние файлов, задачи, watcher'а и событий.
 Отчёт лежит в папке %LOCALAPPDATA%\MG_Helper и отправляется одной кнопкой.
 
- MG-Helper-v3.1.0-beta.1.zip: `8AD0C9666F62D52A8E401C3F32A9BE69B408C874811A003EF017FBF6098A32A6`
- MG-Helper-Setup-3.1.0-beta.1.exe: `8F2C5329F1CD0FFBD92AEBB0720D7ACF5BC4C19CE159BC8213C75AB0CC22C1F6`
+ MG-Helper-v3.1.0-beta.1.zip: `17562E597465B042D9114D67FB6FD059138C6A84FDD9A1D84899397474D943C8`
+ MG-Helper-Setup-3.1.0-beta.1.exe: `EE734DB294169B5E37B00F86C8F572E15B2268BAB3F280F42AA4E52B0A8D6168`

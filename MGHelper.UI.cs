@@ -907,12 +907,8 @@ public static class MgHelperUi
             File.WriteAllText(Path.Combine(data, "migration-report.json"), report, new UTF8Encoding(false));
             NotifyInstallLine("[+] установка " + version + " завершена");
 
-            // 6. запустить приложение (если не просили обратное)
-            if (sandbox || (Environment.GetCommandLineArgs() != null && Array.IndexOf(Environment.GetCommandLineArgs(), "--no-start") >= 0))
-            {
-                return 0;
-            }
-            try { Process.Start(Path.Combine(versionDir, "MGHelper.exe")); } catch { }
+            // 6. приложение отсюда НЕ запускаем: иначе установщик (waituntilterminated)
+            //    ждёт дерево процессов и висит. Запуск делает отдельная строка [Run].
             return 0;
         }
         catch (Exception ex)

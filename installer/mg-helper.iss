@@ -46,6 +46,7 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdir
 [Run]
 ; финализация: переключить current.json, обновить скрипты в DataRoot, автозапуск, старт приложения
 Filename: "{app}\MGHelper.exe"; Parameters: "--install-finalize"; Flags: runhidden waituntilterminated; StatusMsg: "Настраиваю MG Helper (версия, автозапуск)…"
+Filename: "{app}\MGHelper.exe"; Description: "Запустить MG Helper"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN MG_Helper_Watcher"; Flags: runhidden; RunOnceId: "stopwatcher"
