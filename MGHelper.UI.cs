@@ -287,8 +287,10 @@ public static class MgHelperUi
         form.Height = 760;
         form.MinimumSize = new Size(940, 620);
         form.StartPosition = FormStartPosition.CenterScreen;
-        form.BackColor = Color.FromArgb(15, 17, 21);
+        form.BackColor = Color.FromArgb(11, 13, 17);
+        form.ShowInTaskbar = true;
         form.Icon = LoadIcon();
+        ApplyDarkTitleBar();
 
         web = new WebView2();
         try
@@ -316,7 +318,9 @@ public static class MgHelperUi
         BuildTray();
         pollTimer = new System.Windows.Forms.Timer();
         pollTimer.Interval = 1000;
-        pollTimer.Tick += delegate { PushState(); };
+        // Состояние собираем в фоновом потоке: синхронный опрос канала (до 1.5 с) в UI-потоке
+        // подвешивал окно — при перетаскивании оно «зависало».
+        pollTimer.Tick += delegate { StartStateRefresh(); };
         pollTimer.Start();
     }
 
@@ -555,9 +559,30 @@ public static class MgHelperUi
         catch (Exception ex) { Log("[!] auto report: " + ex.Message); }
     }
 
-    private static void PushState()
+    private static int stateRefreshBusy;
+
+    private static void StartStateRefresh()
     {
-        if (web == null || web.CoreWebView2 == null) return;
+        if (System.Threading.Interlocked.CompareExchange(ref stateRefreshBusy, 1, 0) != 0) return;
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                string script = BuildStateScript();
+                if (script != null && form != null && web != null && web.CoreWebView2 != null)
+                {
+                    try { form.BeginInvoke(new Action(delegate { try { web.CoreWebView2.ExecuteScriptAsync(script); } catch { } })); }
+                    catch { }
+                }
+            }
+            catch { }
+            finally { System.Threading.Interlocked.Exchange(ref stateRefreshBusy, 0); }
+        });
+    }
+
+    private static string BuildStateScript()
+    {
+        if (web == null || web.CoreWebView2 == null) return null;
 
         try
         {
@@ -613,12 +638,10 @@ public static class MgHelperUi
             sb.Append(",\"reportPaths\":\"").Append(Get(cfg, "reportPaths") == "full" ? "full" : "masked").Append('"');
             sb.Append(",\"autostart\":").Append(AutostartEnabled() ? "true" : "false").Append("}}");
 
-            string script = "window.mg && window.mg.update(" + sb.ToString() + ");";
-            web.CoreWebView2.ExecuteScriptAsync(script);
-
             UpdateTray(health, age);
+            return "window.mg && window.mg.update(" + sb.ToString() + ");";
         }
-        catch (Exception ex) { Log("[!] push state: " + ex.Message); }
+        catch (Exception ex) { Log("[!] state: " + ex.Message); return null; }
     }
 
     private static string Digits(string s)
@@ -1077,6 +1100,27 @@ public static class MgHelperUi
         {
             string logPath = Path.Combine(dataRoot ?? appDir, "install.log");
             File.AppendAllText(logPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "  " + text + "\r\n", new UTF8Encoding(true));
+        }
+        catch { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    private static void ApplyDarkTitleBar()
+    {
+        // Без этого Windows рисует светлую рамку и белый заголовок вокруг тёмного окна.
+        try
+        {
+            if (form == null || form.Handle == IntPtr.Zero) return;
+            int dark = 1;
+            int res = DwmSetWindowAttribute(form.Handle, 20, ref dark, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE
+            if (res != 0) DwmSetWindowAttribute(form.Handle, 19, ref dark, sizeof(int)); // старое имя атрибута
+            // Windows 11: подкрашиваем заголовок и рамку под фон окна (#0b0d11 -> COLORREF 0x00RRGGBB)
+            int caption = 0x00110D0B;
+            DwmSetWindowAttribute(form.Handle, 35, ref caption, sizeof(int)); // DWMWA_CAPTION_COLOR
+            int border = 0x00251A12;
+            DwmSetWindowAttribute(form.Handle, 34, ref border, sizeof(int));  // DWMWA_BORDER_COLOR
         }
         catch { }
     }

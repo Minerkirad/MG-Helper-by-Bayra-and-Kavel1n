@@ -374,7 +374,6 @@ if ($common -or (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue
     }
 }
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
-if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray } else { Write-Host "[i] В отчёте ПОЛНЫЕ пути (режим выбран в настройках)." -ForegroundColor Yellow }
-else { Write-Host "[i] ВНИМАНИЕ: отчёт содержит ПОЛНЫЕ пути с именем пользователя." -ForegroundColor Yellow }
+if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray } else { Write-Host "[i] В отчёте ПОЛНЫЕ пути (режим выбран в настройках) - в них есть имя учётной записи Windows." -ForegroundColor Yellow }
 # open Explorer with the report file selected
 if (-not $NoOpenReport) { Start-Process explorer.exe "/select,`"$watcherDir\report_$stamp.txt`"" }

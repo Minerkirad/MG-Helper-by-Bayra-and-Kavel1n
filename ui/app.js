@@ -26,24 +26,24 @@
     }
 
     var EVENT_LABELS = {
-        'watcher.start': 'watcher запущен',
-        'watcher.ready': 'watcher готов',
-        'watcher.stop': 'watcher остановлен',
+        'watcher.start': 'защита запущена',
+        'watcher.ready': 'защита готова',
+        'watcher.stop': 'защита остановлена',
         'golden.applied': 'эталон применён',
-        'golden.mismatch': 'эталон от другой машины',
+        'golden.mismatch': 'эталон не подходит к этой системе',
         'adopt.accepted': 'правки приняты как эталон',
-        'apply.failed': 'не удалось применить эталон',
-        'session.start': 'сессия началась',
-        'session.end': 'сессия завершена',
-        'session.unknown': 'SAFE MODE: защита выключена',
-        'guard.rollback': 'откат чужой записи',
+        'apply.failed': 'не удалось вернуть эталон',
+        'session.start': 'игра запущена',
+        'session.end': 'игра закрыта',
+        'session.unknown': 'защита приостановлена',
+        'guard.rollback': 'чужая правка возвращена к эталону',
         'guard.window_expired': 'окно охраны истекло',
         'insurance.restored': 'страховка .bin',
         'insurance.risk': 'риск ошибки 1002',
         'bins.archived': 'архив .bin обновлён',
         'tray.restart': 'трей перезапущен',
         'config.reloaded': 'конфиг перечитан',
-        'error': 'ошибка watcher'
+        'error': 'ошибка защиты'
     };
 
     function label(name) { return EVENT_LABELS[name] || name; }
@@ -61,41 +61,41 @@
         else if (!healthy) { hero.className = 'hero is-warn'; }
 
         if (safeMode) {
-            text('heroTitle', 'SAFE MODE: защита выключена');
-            text('heroSub', 'Эталон не применяется: сессия начата без watcher-а или сменилось железо. Меню [11] — новый эталон.');
+            text('heroTitle', 'Защита приостановлена');
+            text('heroSub', 'Настройки не применяются: игра запущена не под этим эталоном. Сделайте новый эталон в Инструментах.');
             text('heroPill', 'внимание');
         } else if (stopped) {
-            text('heroTitle', 'Watcher не работает');
-            text('heroSub', h ? 'Последний heartbeat ' + fmtTime(h.lastHeartbeatUtc) : 'Файл состояния не найден.');
+            text('heroTitle', 'Защита не активна');
+            text('heroSub', h ? 'Последняя проверка: ' + fmtTime(h.lastHeartbeatUtc) : 'Служба защиты не отвечает.');
             text('heroPill', 'остановлен');
         } else if (healthy) {
-            text('heroTitle', 'Защищено');
-            text('heroSub', 'Эталон под охраной · фаза ' + (h.phase || '—') + (h.gamePid ? ' · игра PID ' + h.gamePid : ''));
+            text('heroTitle', 'Настройки под защитой');
+            text('heroSub', 'Эталон защищён' + (h.phase === 'InGame' ? ' · и��а запущена' : ' · ждём запуска игры'));
             text('heroPill', 'жив');
         } else {
-            text('heroTitle', 'Watcher не отвечает');
-            text('heroSub', 'Heartbeat просрочен — проверьте журнал.');
+            text('heroTitle', 'Защита не отвечает');
+            text('heroSub', 'Долго нет проверки состояния — посмотрите журнал.');
             text('heroPill', 'проверить');
         }
 
         text('goldenState', s.applied ? 'применён' : 'ожидает');
-        text('goldenHint', s.lastApplyUtc ? 'последняя запись ' + fmtTime(s.lastApplyUtc) : 'в этой сессии не применялся');
-        text('sessionState', s.phase || '—');
-        text('sessionHint', s.gamePid ? 'PID ' + s.gamePid : 'сессии нет');
+        text('goldenHint', s.lastApplyUtc ? 'применён в ' + fmtTime(s.lastApplyUtc) : 'в этой игре ещё не применялся');
+        text('sessionState', s.phase === 'InGame' ? 'запущена' : (s.phase || 'не запущена'));
+        text('sessionHint', s.gamePid ? 'игра работает' : 'игры сейчас нет');
         text('rollbacks', String(s.guardRollbacks || 0));
-        text('watcherState', h ? (h.status || '—') : '—');
-        text('watcherHint', h ? 'PID ' + h.pid + ' · heartbeat ' + (h.ageSec === null ? '—' : Math.round(h.ageSec) + ' c') : 'нет данных');
+        text('watcherState', healthy ? 'работает' : (stopped ? 'остановлена' : 'не отвечает'));
+        text('watcherHint', h ? ('проверка ' + (h.ageSec === null ? '—' : Math.round(h.ageSec) + ' с назад')) : 'нет данных');
         text('brandVersion', state.version || '');
         var chip = $('statusChip');
         var chipText = $('statusChipText');
         if (chip) {
             chip.className = 'chip ' + (safeMode || stopped ? 'bad' : (healthy ? 'ok' : 'warn'));
-            if (chipText) { chipText.textContent = safeMode ? 'защита выключена' : (stopped ? 'watcher остановлен' : (healthy ? 'защищено' : 'не отвечает')); }
+            if (chipText) { chipText.textContent = safeMode ? 'защита приостановлена' : (stopped ? 'защита не активна' : (healthy ? 'настройки защищены' : 'нет связи со службой защиты')); }
         }
         var rep = $('reportChipText');
         if (rep) { rep.textContent = state.ui.autoSend === false ? 'автоотправка выключена' : 'автоотправка включена'; }
 
-        renderEvents();
+        renderLog();
         renderSettings(s);
     }
 
@@ -145,6 +145,20 @@
         log.scrollTop = log.scrollHeight;
     }
 
+    function renderReportContent(full) {
+        var el = $('reportWhatsSent');
+        if (!el) { return; }
+        if (full) {
+            el.innerHTML = 'Версия MG Helper, версия Windows и PowerShell, состояние защиты, последние события, ' +
+                'хвост журнала, <b>полные пути (включая имя учётной записи Windows)</b>, два параметра графики ' +
+                'и значения эталона для сравнения, имена файлов резервных копий.';
+        } else {
+            el.innerHTML = 'Версия MG Helper, версия Windows и PowerShell, состояние защиты, последние события, ' +
+                'хвост журнала, настройки с замаскированными путями (<code>C:\\Users\\<USER></code>), ' +
+                'два параметра графики и значения эталона для сравнения, имена файлов резервных копий.';
+        }
+    }
+
     function renderSettings(s) {
         var c = state.ui.config;
         if (!c) { return; }
@@ -153,6 +167,7 @@
         var gw = $('guardWindow'); if (gw && document.activeElement !== gw) { gw.value = c.guardWindowSec || 0; }
         setChecked('autoSend', !!state.ui.autoSend);
         setChecked('reportPaths', state.ui.reportPaths === 'full');
+        renderReportContent(state.ui.reportPaths === 'full');
         setChecked('autostart', !!state.ui.autostart);
     }
 
@@ -273,7 +288,10 @@
     }
     var rp = $('reportPaths');
     if (rp) {
-        rp.addEventListener('change', function () { send('set-report-paths', { value: rp.checked ? 'full' : 'masked' }); });
+        rp.addEventListener('change', function () {
+            renderReportContent(rp.checked);
+            send('set-report-paths', { value: rp.checked ? 'full' : 'masked' });
+        });
     }
     var auto = $('autoSend');
     if (auto) {

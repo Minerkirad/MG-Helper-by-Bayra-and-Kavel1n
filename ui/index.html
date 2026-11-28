@@ -42,7 +42,6 @@
                     <div class="hero-title" id="heroTitle">Проверяю состояние…</div>
                     <div class="hero-sub" id="heroSub">—</div>
                 </div>
-                <div class="hero-pill" id="heroPill">—</div>
             </div>
 
             <div class="grid">
@@ -52,43 +51,39 @@
                     <div class="card-hint" id="goldenHint">—</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Сессия</div>
+                    <div class="card-label">Игра</div>
                     <div class="card-value" id="sessionState">—</div>
                     <div class="card-hint" id="sessionHint">—</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Откатов за сессию</div>
+                    <div class="card-label">Возвращено эталона</div>
                     <div class="card-value" id="rollbacks">0</div>
-                    <div class="card-hint">чужие записи в settings.xml</div>
+                    <div class="card-hint">после чужих правок</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Watcher</div>
+                    <div class="card-label">Защита</div>
                     <div class="card-value" id="watcherState">—</div>
                     <div class="card-hint" id="watcherHint">—</div>
                 </div>
             </div>
 
             <div class="actions">
-                <button class="btn primary" data-cmd="restart-watcher">Перезапустить watcher</button>
-                <button class="btn" data-cmd="reload-config">Перечитать конфиг</button>
-                <button class="btn" data-cmd="apply-golden">Применить эталон</button>
+                <button class="btn primary" data-cmd="restart-watcher">Перезапустить защиту</button>
+                <button class="btn" data-cmd="reload-config">Перечитать настройки</button>
+                <button class="btn" data-cmd="apply-golden">Вернуть эталон</button>
                 <button class="btn" data-cmd="diagnose">Диагностика</button>
                 <button class="btn" data-cmd="send-report">Отправить отчёт</button>
             </div>
-
-            <h2 class="section-title">Последние события</h2>
-            <ul class="events" id="events"><li class="empty">Загружаю…</li></ul>
         </section>
 
         <!-- ОТЧЁТЫ -->
         <section class="page" data-page="reports">
-            <header class="page-head"><h1>Отчёты</h1><span class="chip"><span class="dot"></span><span id="reportChipText">автоотправка включена</span></span></header>
+            <header class="page-head"><h1>Отчёты</h1><span class="chip"><span class="dot ok"></span><span id="reportChipText">автоотправка включена</span></span></header>
 
             <div class="card">
                 <div class="card-label">Автоматические отчёты</div>
-                <p class="muted" style="margin:8px 0 0">Отчёт — это файл с диагностикой. Он уходит разработчику,
-                    когда в защите происходит ошибка (применение эталона не удалось, чужое изменение не откатилось,
-                    эталон от другой машины) — но только если настроен канал отправки. Без канала отчёт остаётся
+                <p class="muted" style="margin:8px 0 0">Если защита не справилась (не удалось вернуть эталон, чужое изменение не откатилось,
+                    эталон от другой машины), приложение само отправит отчёт разработчику. Без настроенного канала отчёт остаётся
                     на диске и никуда не уходит.</p>
                 <div class="row" style="margin-top:8px">
                     <div class="label"><span>Отправлять отчёты автоматически</span><small>можно выключить в любой момент</small></div>
@@ -104,24 +99,23 @@
 
             <div class="grid two" style="margin-top:14px">
                 <div class="card"><div class="card-label">Что уходит</div>
-                    <p class="muted" style="margin-top:8px">Версия MG Helper, версия Windows и PowerShell, состояние watcher'а и эталона,
-                        последние события и хвост журнала, config с замаскированными путями (<code>C:\Users\&lt;USER&gt;</code>),
-                        два параметра графики (TextureQuality и CityDensity) и значения эталона для сравнения,
-                        имена файлов резервных копий.</p></div>
+                    <p class="muted" id="reportWhatsSent" style="margin-top:8px">Версия MG Helper, версия Windows и PowerShell, состояние защиты,
+                        последние события, хвост журнала, настройки с замаскированными путями (<code>C:\Users\&lt;USER&gt;</code>),
+                        два параметра графики и значения эталона для сравнения, имена файлов резервных копий.</p></div>
                 <div class="card"><div class="card-label">Что не уходит</div>
                     <p class="muted" style="margin-top:8px">Полное содержимое settings.xml, файлы игры и Miami Graphics,
-                        никнеймы, пароли, данные аккаунтов. Имя пользователя Windows в путях заменяется на <code>&lt;USER&gt;</code>.</p></div>
+                        никнеймы, пароли, данные аккаунтов.</p></div>
             </div>
         </section>
 
         <!-- ЖУРНАЛ -->
         <section class="page" data-page="log">
-            <header class="page-head"><h1>Журнал</h1><span class="muted" id="logHint">события watcher'а</span></header>
+            <header class="page-head"><h1>Журнал</h1><span class="muted">что происходило с защитой</span></header>
             <div class="toolbar">
-                <button class="tag is-active" data-log="all">Все</button>
+                <button class="tag is-active" data-log="all">Всё</button>
                 <button class="tag" data-log="golden">Эталон</button>
-                <button class="tag" data-log="session">Сессии</button>
-                <button class="tag" data-log="guard">Охрана</button>
+                <button class="tag" data-log="session">Игра</button>
+                <button class="tag" data-log="guard">Правки</button>
                 <button class="tag" data-log="error">Ошибки</button>
             </div>
             <div class="log" id="logBox"><span class="ln">Загружаю…</span></div>
@@ -135,9 +129,9 @@
                     <p class="muted" style="margin-top:8px">Сделать текущие настройки игры новым эталоном защиты.</p>
                     <div class="actions"><button class="btn primary" data-cmd="new-golden">Новый эталон</button></div>
                 </div>
-                <div class="card"><div class="card-label">Сброс настроек</div>
-                    <p class="muted" style="margin-top:8px">Вернуть файл настроек игры к эталону (перед записью — копия).</p>
-                    <div class="actions"><button class="btn" data-cmd="reset-settings">Сбросить настройки</button></div>
+                <div class="card"><div class="card-label">Вернуть настройки</div>
+                    <p class="muted" style="margin-top:8px">Записать в файл настроек игры текущий эталон (перед записью — копия).</p>
+                    <div class="actions"><button class="btn" data-cmd="reset-settings">Вернуть эталон</button></div>
                 </div>
                 <div class="card"><div class="card-label">Miami Graphics</div>
                     <p class="muted" style="margin-top:8px">Восстановить конфиги MG из последнего снапшота.</p>
@@ -147,20 +141,16 @@
                     <p class="muted" style="margin-top:8px">Полный отчёт о состоянии: файлы, события, окружение.</p>
                     <div class="actions"><button class="btn" data-cmd="diagnose">Запустить диагностику</button></div>
                 </div>
-                <div class="card"><div class="card-label">Старое меню</div>
-                    <p class="muted" style="margin-top:8px">Полный набор пунктов 1–15 в консольном меню (аварийный путь).</p>
-                    <div class="actions"><button class="btn" data-cmd="open-menu">Открыть меню</button></div>
-                </div>
                 <div class="card"><div class="card-label">Обновление</div>
                     <p class="muted" style="margin-top:8px">Проверить, не вышла ли новая версия. Обновление ставится
-                        запуском нового Setup.exe поверх текущей версии — данные и эталон не трогаются.</p>
+                        запуском нового установщика — настройки и эталон не трогаются.</p>
                     <div class="actions">
                         <button class="btn" data-cmd="check-updates">Проверить обновления</button>
                         <button class="btn" data-cmd="open-release">Страница релизов</button>
                     </div>
                     <div class="status-line" id="updateStatus"></div>
                 </div>
-                <div class="card"><div class="card-label">Папка данных</div>
+                <div class="card"><div class="card-label">Папка программы</div>
                     <p class="muted" style="margin-top:8px">Эталон, копии, снапшоты, журналы — всё локально.</p>
                     <div class="actions"><button class="btn" data-cmd="open-folder">Открыть папку</button></div>
                 </div>
@@ -173,22 +163,22 @@
             <div class="card">
                 <div class="row">
                     <div class="label"><span>Принимать правки из игры как новый эталон</span>
-                        <small>по умолчанию эталон восстанавливается при выходе</small></div>
+                        <small>по умолчанию эталон возвращается при выходе из игры</small></div>
                     <label class="switch"><input type="checkbox" id="allowAdopt"><i></i></label>
                 </div>
                 <div class="row">
-                    <div class="label"><span>Охрана во время игры</span>
-                        <small>чужая запись в settings.xml откатывается</small></div>
+                    <div class="label"><span>Следить за файлом настроек во время игры</span>
+                        <small>чужая запись будет возвращена к эталону</small></div>
                     <label class="switch"><input type="checkbox" id="sessionGuard"><i></i></label>
                 </div>
                 <div class="row">
-                    <div class="label"><span>Окно охраны, секунд</span>
-                        <small>0 — охранять всю сессию</small></div>
+                    <div class="label"><span>Сколько секунд после запуска следить</span>
+                        <small>0 — всю игру, до выхода</small></div>
                     <input type="number" id="guardWindow" min="0" step="30" value="0">
                 </div>
                 <div class="row">
-                    <div class="label"><span>Автозапуск с Windows</span>
-                        <small>приложение и watcher стартуют при входе</small></div>
+                    <div class="label"><span>Запускать при входе в Windows</span>
+                        <small>приложение появится в трее само</small></div>
                     <label class="switch"><input type="checkbox" id="autostart"><i></i></label>
                 </div>
                 <div class="row">
