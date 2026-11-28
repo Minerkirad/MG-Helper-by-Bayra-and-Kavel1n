@@ -610,6 +610,7 @@ public static class MgHelperUi
             sb.Append(",\"sessionGuard\":").Append(Get(cfg, "sessionGuard") == "false" ? "false" : "true");
             sb.Append(",\"guardWindowSec\":").Append(Digits(Get(cfg, "guardWindowSec")));
             sb.Append("},\"autoSend\":").Append(Get(cfg, "autoSendReports") == "false" ? "false" : "true");
+            sb.Append(",\"reportPaths\":\"").Append(Get(cfg, "reportPaths") == "full" ? "full" : "masked").Append('"');
             sb.Append(",\"autostart\":").Append(AutostartEnabled() ? "true" : "false").Append("}}");
 
             string script = "window.mg && window.mg.update(" + sb.ToString() + ");";
@@ -831,6 +832,9 @@ public static class MgHelperUi
                     SaveConfig(msg);
                     Notify("Настройки сохранены");
                     break;
+                case "set-report-paths":
+                    SetJsonString(Path.Combine(dataRoot, "config.json"), "reportPaths", Get(msg, "value") == "full" ? "full" : "masked");
+                    break;
                 case "set-autosend":
                     SetJsonBool(Path.Combine(dataRoot, "config.json"), "autoSendReports", Get(msg, "value") == "true");
                     break;
@@ -1047,6 +1051,16 @@ public static class MgHelperUi
         string pattern = "\"" + key + "\"\\s*:\\s*(true|false)";
         if (Regex.IsMatch(text, pattern)) text = Regex.Replace(text, pattern, "\"" + key + "\": " + literal);
         else text = InsertKey(text, key, literal);
+        File.WriteAllText(path, text, new UTF8Encoding(false));
+    }
+
+    private static void SetJsonString(string path, string key, string value)
+    {
+        string text = File.ReadAllText(path);
+        string pattern = "\"" + key + "\"\\s*:\\s*\"[^\"]*\"";
+        string literal = "\"" + key + "\": \"" + value + "\"";
+        if (Regex.IsMatch(text, pattern)) text = Regex.Replace(text, pattern, literal);
+        else text = InsertKey(text, key, "\"" + value + "\"");
         File.WriteAllText(path, text, new UTF8Encoding(false));
     }
 

@@ -1,7 +1,7 @@
 ﻿# Locates the deployed watcher and runs its -Diagnose mode.
 # Used as source for 5-diagnose.bat (EncodedCommand).
 # by Bayra & Kavel1n
-param([switch]$NoOpenReport, [switch]$Send)   # -Send: отправить отчёт в Telegram (если настроен)   # -NoOpenReport: не открывать Проводник (тесты/автоматизация)
+param([switch]$NoOpenReport, [switch]$Send, [switch]$FullPaths)   # -Send: отправить отчёт в Telegram (если настроен)   # -NoOpenReport: не открывать Проводник (тесты/автоматизация)
 $host.UI.RawUI.WindowTitle = 'MG Helper Diagnose - by Bayra & Kavel1n'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
@@ -332,9 +332,16 @@ $extra | Add-Content (Join-Path $watcherDir "report_$stamp.txt") -Encoding UTF8
 # MG-CR-011: the report goes to strangers - mask the user's identity by default.
 # Full paths are opt-in with explicit confirmation. Applied to the WHOLE file
 # (including the watcher -Diagnose header) by post-processing.
-$mask = $true
+# Режим путей: "masked" (по умолчанию) или "full" (с именем учётной записи Windows).
+# Берётся из config.json -> reportPaths; -FullPaths принудительно включает полные пути.
+$reportPathsMode = 'masked'
+try {
+    $dCfg = Get-Content -LiteralPath (Join-Path $watcherDir 'config.json') -Raw | ConvertFrom-Json
+    if ($dCfg.reportPaths -eq 'full') { $reportPathsMode = 'full' }
+} catch { }
+if ($FullPaths) { $reportPathsMode = 'full' }
+$mask = ($reportPathsMode -ne 'full')
 Write-Host ""
-$fullAnswer = Read-Host "Включить в отчёт ПОЛНЫЕ пути (содержат имя пользователя)? (да/нет)"
 if ($fullAnswer -match '^(д|да|y|yes)$') { $mask = $false }
 $reportPath = Join-Path $watcherDir "report_$stamp.txt"
 if ($mask) {
@@ -367,7 +374,7 @@ if ($common -or (Get-Command Send-TelegramDocument -ErrorAction SilentlyContinue
     }
 }
 Write-Host "    Send that FILE (not a screenshot) to Bayra / Kavel1n." -ForegroundColor Green
-if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray }
+if ($mask) { Write-Host "[i] Персональные пути замаскированы (C:\Users\<USER>)." -ForegroundColor DarkGray } else { Write-Host "[i] В отчёте ПОЛНЫЕ пути (режим выбран в настройках)." -ForegroundColor Yellow }
 else { Write-Host "[i] ВНИМАНИЕ: отчёт содержит ПОЛНЫЕ пути с именем пользователя." -ForegroundColor Yellow }
 # open Explorer with the report file selected
 if (-not $NoOpenReport) { Start-Process explorer.exe "/select,`"$watcherDir\report_$stamp.txt`"" }

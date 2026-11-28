@@ -152,6 +152,7 @@
         setChecked('sessionGuard', c.sessionGuard !== false);
         var gw = $('guardWindow'); if (gw && document.activeElement !== gw) { gw.value = c.guardWindowSec || 0; }
         setChecked('autoSend', !!state.ui.autoSend);
+        setChecked('reportPaths', state.ui.reportPaths === 'full');
         setChecked('autostart', !!state.ui.autostart);
     }
 
@@ -269,6 +270,10 @@
             text('settingsStatus', 'сохранено');
             setTimeout(function () { text('settingsStatus', ''); }, 2500);
         });
+    }
+    var rp = $('reportPaths');
+    if (rp) {
+        rp.addEventListener('change', function () { send('set-report-paths', { value: rp.checked ? 'full' : 'masked' }); });
     }
     var auto = $('autoSend');
     if (auto) {
