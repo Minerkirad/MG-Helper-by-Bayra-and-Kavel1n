@@ -950,6 +950,34 @@ public static class MgHelperUi
 
             NotifyInstallLine("[*] MG Helper " + version + " (version dir: " + versionDir + ")");
 
+            // 0. убрать legacy-компоненты 2.6.1: старый трей и его ярлык в автозагрузке.
+            //    Иначе в трее висят ДВА значка, и старый открывает консольное меню.
+            if (!sandbox)
+            {
+                foreach (string legacy in new string[] { "MG-Helper-Tray", "MG-Helper-Host" })
+                {
+                    try
+                    {
+                        foreach (Process p in Process.GetProcessesByName(legacy))
+                        {
+                            try { p.Kill(); p.WaitForExit(3000); NotifyInstallLine("[i] остановлен legacy-процесс " + legacy + " (" + p.Id + ")"); } catch { }
+                        }
+                    }
+                    catch { }
+                }
+                try
+                {
+                    string startupDir = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+                    string legacyLnk = Path.Combine(startupDir, "MG Helper Tray.lnk");
+                    if (File.Exists(legacyLnk))
+                    {
+                        File.Delete(legacyLnk);
+                        NotifyInstallLine("[i] удалён ярлык автозагрузки старого трея");
+                    }
+                }
+                catch (Exception ex) { NotifyInstallLine("[!] legacy ярлык: " + ex.Message); }
+            }
+
             // 1. остановить старый watcher: флаг + завершение задачи
             try { File.WriteAllText(Path.Combine(data, "stop.request"), DateTime.UtcNow.ToString("o"), new UTF8Encoding(false)); } catch { }
             RunHidden("schtasks", "/End /TN MG_Helper_Watcher");
