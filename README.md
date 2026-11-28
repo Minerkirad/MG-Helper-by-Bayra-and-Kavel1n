@@ -19,6 +19,7 @@
 |---|---|
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | что работает на любой машине и что делать, если компонента нет |
 | [docs/SIGNING.md](docs/SIGNING.md) | подпись кода: почему Windows предупреждает и как это убрать |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | что делаем дальше: приоритеты P0–P2, решения, порядок |
 | [docs/PLAN-3.1.md](docs/PLAN-3.1.md) | план перехода на приложение (UI, иконка, отчёты, установщик) |
 | [docs/PLAN-3.0.md](docs/PLAN-3.0.md) | план 3.0: C#-ядро, watcher, канал, раскладка версий |
 | [docs/adr/](docs/adr) | принятые архитектурные решения |
