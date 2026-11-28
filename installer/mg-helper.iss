@@ -49,3 +49,24 @@ Filename: "{app}\MGHelper.exe"; Parameters: "--install-finalize"; Flags: runhidd
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN MG_Helper_Watcher"; Flags: runhidden; RunOnceId: "stopwatcher"
+[Code]
+{ Проверка .NET Framework 4.8: приложение на нём работает, без него установка бессмысленна. }
+function InitializeSetup(): Boolean;
+var
+  Release: Cardinal;
+  Found: Boolean;
+begin
+  Result := True;
+  Found := RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full', 'Release', Release);
+  if not Found then
+    Found := RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full', 'Release', Release);
+  if not Found or (Release < 528040) then
+  begin
+    MsgBox('Для MG Helper нужен .NET Framework 4.8 или новее.' + #13#10 + #13#10 +
+           'Он уже входит в Windows 10 (обновление 1903 и новее) и Windows 11.' + #13#10 +
+           'Установите обновление Windows или .NET Framework 4.8 с сайта Microsoft и повторите установку.' + #13#10 + #13#10 +
+           'Ваши файлы настроек и эталон не затронуты.',
+           mbError, MB_OK);
+    Result := False;
+  end;
+end;

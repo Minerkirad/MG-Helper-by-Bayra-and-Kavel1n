@@ -63,6 +63,11 @@ public static class MgHelperUi
         // нативная финализация установки: установщик вызывает exe, а не PowerShell
         int finIdx = args == null ? -1 : Array.IndexOf(args, "--install-finalize");
         if (finIdx >= 0) { return InstallFinalize(); }
+        // обычный запуск: проверяем и при необходимости чиним автозапуск
+        if (!smoke && string.IsNullOrEmpty(shotDir) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MG_HELPER_DIR")))
+        {
+            EnsureAutostartTask();
+        }
         if (!Directory.Exists(uiDir))
         {
             string nested = Path.Combine(appDir, "App");
@@ -925,6 +930,45 @@ public static class MgHelperUi
             File.AppendAllText(logPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "  " + text + "\r\n", new UTF8Encoding(true));
         }
         catch { }
+    }
+
+    private static string RunCapture(string exe, string args)
+    {
+        try
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(exe, args);
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            using (Process p = Process.Start(psi))
+            {
+                string output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(8000);
+                return output;
+            }
+        }
+        catch { return ""; }
+    }
+
+    private static void EnsureAutostartTask()
+    {
+        // Задача автозапуска уже один раз «съезжала» на старый путь. Проверяем, что она
+        // указывает на watcher той версии, которая сейчас запущена, иначе чиним.
+        try
+        {
+            string watcherExe = Path.Combine(appDir, "MGHelper.Watcher.exe");
+            if (!File.Exists(watcherExe)) return;
+            string xml = RunCapture("schtasks", "/Query /TN MG_Helper_Watcher /XML");
+            bool ok = !string.IsNullOrEmpty(xml) &&
+                      xml.IndexOf(watcherExe, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (ok) return;
+            RunCapture("schtasks", "/Create /F /SC MINUTE /MO 10 /TN MG_Helper_Watcher /TR \"\"" + watcherExe + "\"");
+            RunCapture("schtasks", "/Run /TN MG_Helper_Watcher");
+            NotifyInstallLine("[i] автозапуск восстановлен: задача указывает на " + watcherExe);
+            Log("[i] autostart repaired -> " + watcherExe);
+        }
+        catch (Exception ex) { Log("[!] autostart check: " + ex.Message); }
     }
 
     private static void RunHidden(string exe, string args)
