@@ -28,14 +28,12 @@ $api = 'https://api.cloudflare.com/client/v4'
 $token = $env:MG_CF_TOKEN
 if (-not $token) { throw 'нет MG_CF_TOKEN: создайте токен Cloudflare (Workers Scripts:Edit) и задайте переменную окружения' }
 $hdr = @{ Authorization = "Bearer $token" }
-function Say($t, $c = 'Gray') { Write-Host $t -ForegroundColor $c }
 
 # --- 1. account_id ---
 $accounts = Invoke-RestMethod "$api/accounts" -Headers $hdr -TimeoutSec 30
 if (-not $accounts.success) { throw ('Cloudflare API: ' + ($accounts.errors | ConvertTo-Json -Compress)) }
 $accountId = $accounts.result[0].id
-Say "[i] аккаунт: $($accounts.result[0].name) ($accountId)"
-
+Write-Host "[i] аккаунт: $($accounts.result[0].name) ($accountId)"
 # --- 2. заливка воркера (multipart/form-data, ES-модуль) ---
 $workerSrc = Get-Content -LiteralPath (Join-Path $repo 'relay\worker.js') -Raw
 $meta = @{ main_module = 'worker.js'; compatibility_date = '2024-11-01' } | ConvertTo-Json -Compress
@@ -50,7 +48,7 @@ try {
         -F "worker.js=@$tmpCode;type=application/javascript+module" 2>&1
     $upJson = $up | ConvertFrom-Json
     if (-not $upJson.success) { throw ('заливка не удалась: ' + ($upJson.errors | ConvertTo-Json -Compress)) }
-    Say "[+] воркер залит: $WorkerName" Green
+    Write-Host "[+] воркер залит: $WorkerName" Green
 } finally {
     Remove-Item $tmpMeta, $tmpCode -Force -ErrorAction SilentlyContinue
 }
@@ -64,8 +62,7 @@ if (-not $subdomain) {
     $subdomain = $created.result.subdomain
 }
 $workerUrl = "https://$WorkerName.$subdomain.workers.dev"
-Say "[i] адрес воркера: $workerUrl" Cyan
-
+Write-Host "[i] адрес воркера: $workerUrl" Cyan
 # --- 4. секреты ---
 $mgKey = [guid]::NewGuid().ToString('N')
 function Set-Secret([string]$name, [string]$value) {
@@ -74,7 +71,7 @@ function Set-Secret([string]$name, [string]$value) {
         -H "Authorization: Bearer $token" -H 'Content-Type: application/json' -d $body 2>&1
     $rj = $r | ConvertFrom-Json
     if (-not $rj.success) { throw ("секрет $name не записан: " + ($rj.errors | ConvertTo-Json -Compress)) }
-    Say "[+] секрет $name записан" Green
+    Write-Host "[+] секрет $name записан" Green
 }
 Set-Secret 'TG_TOKEN' $BotToken
 Set-Secret 'MG_KEY' $mgKey
@@ -86,22 +83,22 @@ if (-not $ChatId) {
     try {
         $d = Invoke-RestMethod "$workerUrl/discover" -Headers @{ 'X-MG-Key' = $mgKey } -TimeoutSec 30
         if ($d.ok -and $d.chats.Count -gt 0) {
-            Say '[i] найдены чаты, которые писали боту:' Cyan
+            Write-Host '[i] найдены чаты, которые писали боту:' Cyan
             $d.chats | ForEach-Object { Write-Host ("    id={0}  type={1}  {2}" -f $_.id, $_.type, $_.name) }
             $ChatId = [string]$d.chats[0].id
             Set-Secret 'TG_CHAT' $ChatId
         } else {
-            Say '[!] боту ещё не писали: отправьте ему /start, затем повторите -ChatId не задан' Yellow
+            Write-Host '[!] боту ещё не писали: отправьте ему /start, затем повторите -ChatId не задан' Yellow
         }
-    } catch { Say ("[!] /discover: " + $_.Exception.Message) Yellow }
+    } catch { Write-Host ("[!] /discover: " + $_.Exception.Message) -ForegroundColor Yellow }
 }
 
 # --- 6. проверка ---
 Start-Sleep -Seconds 2
 try {
     $h = Invoke-RestMethod "$workerUrl/health" -TimeoutSec 30
-    Say ("[+] /health: configured={0} chatSet={1}" -f $h.configured, $h.chatSet) Green
-} catch { Say ("[!] /health: " + $_.Exception.Message) Yellow }
+    Write-Host ("[+] /health: configured={0} chatSet={1}" -f $h.configured, $h.chatSet) Green
+} catch { Write-Host ("[!] /health: " + $_.Exception.Message) -ForegroundColor Yellow }
 
 if ($ChatId) {
     $live = Join-Path $env:LOCALAPPDATA 'MG_Helper'
@@ -110,12 +107,12 @@ if ($ChatId) {
         $body = @{ 'chat_id' = $ChatId } # заглушка, используется multipart ниже
         $mp = & curl.exe -s -X POST "$workerUrl/report" -F "version=deploy-test" -F "caption=MG Helper relay test" -F "document=@$($rep.FullName);type=text/plain" 2>&1
         $mpj = $mp | ConvertFrom-Json
-        if ($mpj.ok) { Say '[+] тестовый отчёт отправлен в Telegram' Green }
-        else { Say ('[!] отправка: ' + ($mp | Out-String).Trim()) Yellow }
+        if ($mpj.ok) { Write-Host '[+] тестовый отчёт отправлен в Telegram' -ForegroundColor Green }
+        else { Write-Host ('[!] отправка: ' + ($mp | Out-String).Trim()) -ForegroundColor Yellow }
     }
 }
 
-Say ''
-Say "URL для config.json -> reportUrl: $workerUrl" Cyan
-Say "Ключ (служебный, в клиенте не нужен): $mgKey" DarkGray
+Write-Host ''
+Write-Host "URL для config.json -> reportUrl: $workerUrl" Cyan
+Write-Host "Ключ (служебный, в клиенте не нужен): $mgKey" DarkGray
 exit 0
